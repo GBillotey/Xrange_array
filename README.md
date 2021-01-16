@@ -4,7 +4,7 @@
 **Xrange_array** is a [numpy](https://numpy.org/) `nd.array` subclass which allows to represent floating-point numbers in an extended range:  
 - `[1.e-646456992, 1.e+646456992]`.   
 
-Float or complex numbers in simple or double precision are implemented.  
+Float or complex numbers in simple or double precision woth extra-exponent stored as and `int32` are implemented.  
 It also provides :  
 - The main binary operations `(+, -, *, /, <, <=, >, >=)`
 - a few selected complex functions `(abs, sqrt, square, conj, log)`
