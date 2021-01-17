@@ -123,16 +123,25 @@ Reference:
         match = re.match(exp_pattern, input_str)
         if match:
             m = float(match.group(1))
-            exp_re = 0
+            exp_10 = 0
             if match.group(2) in ["e", "E"]:
                 try:
-                    exp_re = int(match.group(3))
+                    exp_10 = int(match.group(3))
+                    if abs(exp_10) > 646456992:
+                        raise ValueError("Overflow int string input, cannot "
+                            "represent exponent with int32, maxint 2**31-1")
                 except ValueError:
                     raise ValueError(err_msg.format(input_str))
-                rr = 3.321928094887362 # (34) mpmath.log(10) / mpmath.log(2)
-                exp_re, mod  = np.divmod(exp_re * rr, 1.)
-                m = m * 2.**mod # 0.5 <= m10 <  10.0
-            return m, exp_re
+    # Need extra precision for this division, will use Python native integers.
+    # >>> import mpmath
+    # >>> mpmath.mp.dps = 30
+    # >>> mpmath.log("10.") / mpmath.log("2.") * mpmath.mpf("1.e25")
+    # mpf('33219280948873623478703194.2948914')
+                rr_e = 33219280948873623478703194
+                e25 = 10000000000000000000000000
+                exp_10, mod = divmod(exp_10 * rr_e, e25)
+                m *= 2.**(mod * 1.e-25)
+            return m, exp_10
         else:
             raise ValueError(err_msg.format(input_str))
 
@@ -717,11 +726,8 @@ Reference:
             np.get_printoptions(precision)
         """
         print_decimals = np.get_printoptions()["precision"]
-        r = 0.3010299956639812 # mpmath.log(2) / mpmath.log(10)
-
         m2, exp2 = Xrange_array._normalize(m2, exp2) # 0.5 <= m2 < 1.0
-        exp10, mod = np.divmod(exp2 * r, 1.) 
-        m10 = m2 * 10.**mod # 0.5 <= m10 <  10.0
+        m10, exp10 = Xrange_array._rebase_2to10(m2, exp2)
 
         if np.isscalar(m10): # scalar do not support item assignment
             if (np.abs(m10) < 1.0):
@@ -768,3 +774,45 @@ Reference:
         str_arr = concat(str_arr,
             np.char.rjust(np.abs(exp10).astype("|U10"), exp_digits, "0"))
         return str_arr
+
+    @staticmethod
+    def _rebase_2to10(m2, exp2):
+        """
+        Parameters:
+        m2 mantissa in base 2
+        exp2 int32 exponent in base 2
+
+        Returns:
+        m10 mantissa in base 10
+        exp10 int32 exponent in base 10
+
+        Note : 
+        This is nothing more than a high-precision version of:
+            >>> r = 0.3010299956639812
+            >>> exp10, mod = np.divmod(exp2 * r, 1.)
+            >>> return m2 * 10.**mod, exp10
+
+        However, to guarantee an accuracy > 14 digits (in reality, 15) for
+        `mod` with the highest int32 base 2 exponent (2**31 - 1) we need an
+        overall precision of 26 digits for this divmod.
+        """
+        # We will divide 'by hand' in base 10.
+        # >>> import mpmath
+        # >>> mpmath.mp.dps = 30
+        # >>> mpmath.log("2.") / mpmath.log("10.") * mpmath.mpf("1.e26")
+        # mpf('30102999566398119521373889.4724503')
+        r_e = "30102999566398119521373889"
+        exp2_64 = exp2.astype(np.int64)
+        d = np.zeros_like(exp2, dtype=np.int64)
+        m = np.zeros_like(exp2, dtype=np.int64)
+        for i in range(26):
+            mi = np.trunc(exp2_64 * int(r_e[i])) # trunc to handle neg. exp
+            if (i + 1) <= 10: # mi_ is clearly below 9. * (2**32 - 1)
+                              # so not worth checking above 10**10
+                raise_integer = (np.abs(mi) >= int(10**(i + 1)))
+                di, mi[raise_integer] = np.divmod(mi[raise_integer],
+                                                   int(10**(i + 1)))
+                d[raise_integer] += di.astype(np.int64)
+            m = m * 10 + mi
+        d_m, m = np.divmod(m * 1e-26, 1.)
+        return  m2 * 10.**m, (d + d_m).astype(np.int32)

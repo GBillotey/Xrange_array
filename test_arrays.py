@@ -19,7 +19,7 @@ def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.5):
     print("testing function", ufunc)
     rg = np.random.default_rng(100)
 
-    n_vec = 5000  
+    n_vec = 500
     max_bin_exp = 20
     
     # testing binary operation of reals extended arrays
@@ -45,7 +45,6 @@ def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.5):
 
     # testing binary operation of reals extended arrays
     for dtype in [np.float32, np.float64]:
-#        print("dtype2", dtype, " -> ", res.mantissa.dtype)
         op1 = (rg.random([n_vec], dtype=dtype) +
                    1j*rg.random([n_vec], dtype=dtype))
         op1 *= 2.**rg.integers(low=-max_bin_exp, high=max_bin_exp, 
@@ -69,7 +68,6 @@ def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.5):
         _matching(ufunc(Xrange_array(op1, exp_shift_array,
                                             exp_shift_array)),
                   expected, almost, dtype, cmp_op, ktol)
-
 
 
 def _test_op2(ufunc, almost=False, cmp_op=False):
@@ -102,10 +100,7 @@ def _test_op2(ufunc, almost=False, cmp_op=False):
                          op2.reshape(50, 10))
         res_2d = ufunc(Xrange_array(op1.reshape(50, 10)),
                     Xrange_array(op2.reshape(50, 10)))
-#        print("expected", expected)
-#        print("res", res)
-#        print("expected sh", expected.shape)
-#        print("res sh", res.shape)
+
         _matching(res_2d, expected_2d, almost, dtype, cmp_op)
 
         # Checking datatype
@@ -301,7 +296,7 @@ def test_template_view():
     d = a.view(Xrange_array)
     assert d.shape == a.shape
     assert d._mantissa.shape == a[:].shape
-    #assert d.exp == 0.#a[:].shape
+
     # modifying array modifies view
     val = a[5]
     assert d._mantissa[5] == val
@@ -412,19 +407,6 @@ def timing_op2_complex(ufunc, dtype=np.float64):
     print("timing", ufunc, t0, t1, "ratio:", t0/t1)
 
 
-
-def test_not_overflow():
-    a = np.linspace(0., 5., 12, dtype=np.float64)
-    b = Xrange_array(a)
-    
-#    
-#    for i in range(9):
-#        a *= a
-#        print(a)
-        
-    for i in range(15):
-        b = b * b
-        print(b)
         
 def test_underflow():
     _dtype = np.float64
@@ -437,7 +419,7 @@ def test_underflow():
     e_a = Xrange_array(a)
     e_b = Xrange_array(b)
     e_res = e_a - e_b 
-    res = e_res.mantissa * 2.**e_res.exp
+    res = e_res._mantissa * 2.**e_res._exp_re
     
     np.testing.assert_array_equal(res, expected)
     
@@ -469,7 +451,6 @@ def test_print():
     a = 1.j * np.array([1., 1., np.pi, np.pi], dtype=np.float64)
     Xa = Xrange_array(a)
     for exp10 in range(1000):
-        #Xa = Xa * [-10., 0.1, 10., -0.1]
         Xa = [-10., 0.1, 10., -0.1] * Xa
     str2 = ("[ 0.00e+00➕1.00e+1000j  0.00e+00➕1.00e-1000j"
             "  0.00e+00➕3.14e+1000j  0.00e+00➕3.14e-1000j]")
@@ -503,6 +484,21 @@ def test_print():
         assert Xa.__str__() == str6
         assert (Xa**2).__str__() == str6_sq
         assert Xb.__str__() == str6b
+        
+    # Testing accuracy of mantissa for highest exponents    
+    Xa = Xrange_array([["1.0e+646456992", "1.2345678901234e+646456992"], 
+                       ["1.0e+646456991", "1.2345678901234e+646456991"], 
+                       ["1.0e+646456990", "1.2345678901234e+646456990"],
+                       ["-1.0e-646456991", "1.2345678901234e-646456991"], 
+                       ["1.0e-646456992", "1.2345678901234e-646456992"]])
+    str_13 = ("[[ 1.0000000000000e+646456992  1.2345678901234e+646456992]\n"
+        " [ 1.0000000000000e+646456991  1.2345678901234e+646456991]\n"
+        " [ 1.0000000000000e+646456990  1.2345678901234e+646456990]\n"
+        " [-1.0000000000000e-646456991  1.2345678901234e-646456991]\n"
+        " [ 1.0000000000000e-646456992  1.2345678901234e-646456992]]")
+    with np.printoptions(precision=13, linewidth=100) as _:
+        assert Xa.__str__() == str_13
+
 
     
 if __name__ == "__main__":
@@ -515,5 +511,6 @@ if __name__ == "__main__":
     test_template_view()
     test_ops()
     test_edge_cases()
+    test_underflow()
     
     test_print()
