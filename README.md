@@ -25,7 +25,7 @@ Accurate base-10 conversion for string-inputs and printing:
 > `>>> with np.printoptions(precision=13) as _:`  
 > `        print(Xb)`  
 > `[ 3.1415926535898e+646456991➕0.0000000000000e+000000000j`  
-> ` 0.0000000000000e+000000000➖3.1415926535898e-646456991j]`  
+> `  0.0000000000000e+000000000➖3.1415926535898e-646456991j]`  
 
 Performance compared with standard `np.complex128` operations on large (40'000) arrays:  
 
