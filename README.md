@@ -19,7 +19,7 @@ Basic use:
 > `[[ 1.52413839e-3574  9.00000000e-0016]`  
 > ` [ 1.00000000e+1400  1.00000000e+0000]]`  
 
-Accurate base-10 conversion for printing:
+Accurate base-10 conversion for string-input and printing:
 
 > `>>> Xb = 1.j * np.pi * Xrange_array(["1.e+646456992","1.e-646456992" ])`  
 > `>>> with np.printoptions(precision=12, linewidth=100) as _:`  
