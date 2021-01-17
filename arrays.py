@@ -668,7 +668,7 @@ Reference:
             exp = np.clip(((bits >> 23) & 0xff) + shift, 0, None)
             return np.copysign(((exp << 23)  + (bits & 0x7fffff)).view(
                 np.float32), m)
-    
+
         elif dtype == np.float64:
             bits = np.abs(m).view(np.int64)
             exp = np.clip(((bits >> 52) & 0x7ff) + shift, 0, None)
@@ -788,13 +788,13 @@ Reference:
 
         Note : 
         This is nothing more than a high-precision version of:
-            >>> r = 0.3010299956639812
-            >>> exp10, mod = np.divmod(exp2 * r, 1.)
-            >>> return m2 * 10.**mod, exp10
+            > r = 0.3010299956639812 # math.log10(2)
+            > exp10, mod = np.divmod(exp2 * r, 1.)
+            > return m2 * 10.**mod, exp10
 
         However, to guarantee an accuracy > 15 digits (in reality, close to 16)
-        for `mod` with the highest int32 base 2 exponent (2**31 - 1) we need an
-        overall precision of 25 digits for this divmod.
+        for `mod` with the 9-digits highest int32 base 2 exponent (2**31 - 1)
+        we need an overall precision of 25 digits for this divmod.
         """
         # We will divide 'by hand' in base 10.
         # >>> import mpmath
@@ -817,6 +817,6 @@ Reference:
                 m = m * 10. + mi
             else:       # switch to 2nd part (avoid accumulating addition err)
                 mm = mm * 10. + mi
-        m = m * 1.e15 + mm
-        d_m, m = np.divmod(m * 1e-25, 1.)
+        m = (m  + mm * 1e-15) * 1.e-10
+        d_m, m = np.divmod(m, 1.) # Accumulate of below 1. can reach 1.
         return  m2 * 10.**m, (d + d_m).astype(np.int32)

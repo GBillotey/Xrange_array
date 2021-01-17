@@ -499,7 +499,12 @@ def test_print():
     with np.printoptions(precision=14, linewidth=100) as _:
         assert Xa.__str__() == str_14
 
-
+    Xb = np.array([1., -1.j]) * np.pi * Xrange_array(
+            ["1.e+646456991","1.e-646456991" ])
+    str_13 = ("[ 3.1415926535898e+646456991➕0.0000000000000e+000000000j\n"
+             "  0.0000000000000e+000000000➖3.1415926535898e-646456991j]")
+    with np.printoptions(precision=13, linewidth=100) as _:
+        assert Xb.__str__() == str_13
 
     
 if __name__ == "__main__":
