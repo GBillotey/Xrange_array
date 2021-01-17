@@ -21,10 +21,11 @@ Basic use:
 
 Accurate base-10 conversion for string-input and printing:
 
-> `>>> Xb = 1.j * np.pi * Xrange_array(["1.e+646456992","1.e-646456992" ])`  
-> `>>> with np.printoptions(precision=12, linewidth=100) as _:`  
-> `        print(Xa)`  
-> `[ 0.0000000000000e+00➕3.1415926535898e+646456992j  0.0000000000000e+00➕3.1415926535898e-646456992j]`  
+> `>>> Xb = np.array([1., -1.j]) * np.pi * Xrange_array(["1.e+646456992","1.e-646456992" ])`  
+> `>>> with np.printoptions(precision=13) as _:`  
+> `        print(Xb)`  
+> `[ 3.1415926535898e+646456992➕0.0000000000000e+000000000j`  
+> ` 0.0000000000000e+000000000➖3.1415926535898e-646456992j]`  
 
 Performance compared with standard `np.complex128` operations on large (40'000) arrays:  
 
