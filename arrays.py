@@ -792,27 +792,31 @@ Reference:
             >>> exp10, mod = np.divmod(exp2 * r, 1.)
             >>> return m2 * 10.**mod, exp10
 
-        However, to guarantee an accuracy > 14 digits (in reality, 15) for
-        `mod` with the highest int32 base 2 exponent (2**31 - 1) we need an
-        overall precision of 26 digits for this divmod.
+        However, to guarantee an accuracy > 15 digits (in reality, close to 16)
+        for `mod` with the highest int32 base 2 exponent (2**31 - 1) we need an
+        overall precision of 25 digits for this divmod.
         """
         # We will divide 'by hand' in base 10.
         # >>> import mpmath
         # >>> mpmath.mp.dps = 30
-        # >>> mpmath.log("2.") / mpmath.log("10.") * mpmath.mpf("1.e26")
-        # mpf('30102999566398119521373889.4724503')
-        r_e = "30102999566398119521373889"
-        exp2_64 = exp2.astype(np.int64)
+        # >>> mpmath.log("2.") / mpmath.log("10.") * mpmath.mpf("1.e25")
+        # mpf('3010299956639811952137388.94724503')
+        r_e = "3010299956639811952137388"
         d = np.zeros_like(exp2, dtype=np.int64)
-        m = np.zeros_like(exp2, dtype=np.int64)
-        for i in range(26):
-            mi = np.trunc(exp2_64 * int(r_e[i])) # trunc to handle neg. exp
+        m = np.zeros_like(exp2, dtype=np.float64)
+        mm = np.zeros_like(exp2, dtype=np.float64)
+        for i in range(25):
+            mi = exp2 * float(r_e[i]) # double precision
             if (i + 1) <= 10: # mi_ is clearly below 9. * (2**32 - 1)
                               # so not worth checking above 10**10
-                raise_integer = (np.abs(mi) >= int(10**(i + 1)))
-                di, mi[raise_integer] = np.divmod(mi[raise_integer],
-                                                   int(10**(i + 1)))
+                raise_integer = (np.abs(mi) >= 10.**(i + 1))
+                di, mi[raise_integer] = np.divmod(
+                        mi[raise_integer], 10.**(i + 1))
                 d[raise_integer] += di.astype(np.int64)
-            m = m * 10 + mi
-        d_m, m = np.divmod(m * 1e-26, 1.)
+            if i < 10:  # before reaching max exact integer for float64
+                m = m * 10. + mi
+            else:       # switch to 2nd part (avoid accumulating addition err)
+                mm = mm * 10. + mi
+        m = m * 1.e15 + mm
+        d_m, m = np.divmod(m * 1e-25, 1.)
         return  m2 * 10.**m, (d + d_m).astype(np.int32)
