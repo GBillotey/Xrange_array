@@ -19,13 +19,13 @@ Basic use:
 > `[[ 1.52413839e-3574  9.00000000e-0016]`  
 > ` [ 1.00000000e+1400  1.00000000e+0000]]`  
 
-Accurate base-10 conversion for string-input and printing:
+Accurate base-10 conversion for string-inputs and printing:
 
-> `>>> Xb = np.array([1., -1.j]) * np.pi * Xrange_array(["1.e+646456992","1.e-646456992" ])`  
+> `>>> Xb = np.array([1., -1.j]) * np.pi * Xrange_array(["1.e+646456991","1.e-646456991" ])`  
 > `>>> with np.printoptions(precision=13) as _:`  
 > `        print(Xb)`  
-> `[ 3.1415926535898e+646456992➕0.0000000000000e+000000000j`  
-> ` 0.0000000000000e+000000000➖3.1415926535898e-646456992j]`  
+> `[ 3.1415926535898e+646456991➕0.0000000000000e+000000000j`  
+> ` 0.0000000000000e+000000000➖3.1415926535898e-646456991j]`  
 
 Performance compared with standard `np.complex128` operations on large (40'000) arrays:  
 
@@ -33,3 +33,4 @@ Performance compared with standard `np.complex128` operations on large (40'000) 
 - `add` overhead ratio: `21.9`
 - `multiply` overhead ratio: `24.4`
 - `abs2` overhead ratio: `7.7`
+
