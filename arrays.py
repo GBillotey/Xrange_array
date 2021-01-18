@@ -88,7 +88,7 @@ Reference:
 
     # types that can be 'viewed' as Xrange_array:
     _HANDLED_TYPES = (np.ndarray, numbers.Number, list)
-
+    #__array_priority__ = 20
     def __new__(cls, mantissa, exp_re=None, exp_im=None, str_input_dtype=None):
         """
         Constructor
@@ -137,10 +137,15 @@ Reference:
     # >>> mpmath.mp.dps = 30
     # >>> mpmath.log("10.") / mpmath.log("2.") * mpmath.mpf("1.e25")
     # mpf('33219280948873623478703194.2948914')
-                rr_e = 33219280948873623478703194
-                e25 = 10000000000000000000000000
-                exp_10, mod = divmod(exp_10 * rr_e, e25)
-                m *= 2.**(mod * 1.e-25)
+    # mpmath.log("10.") / mpmath.log("2.") * mpmath.mpf(2**86)
+    # mpf('32127717158500545300342142.8746567')
+#                rr_e = 33219280948873623478703194
+#                e25 = 10000000000000000000000000
+                rr_hex = 514043474536008724805474285
+                #e83 = 2**84
+                #exp_10, mod = divmod(exp_10 * rr_e, e25)
+                exp_10, mod = divmod(exp_10 * rr_hex, 2**87)
+                m *= 2.**(mod * 2.**-87)
             return m, exp_10
         else:
             raise ValueError(err_msg.format(input_str))
@@ -154,10 +159,9 @@ Reference:
         if mantissa_dtype not in (Xrange_array._COMPLEX_DTYPES +
                                   Xrange_array._FLOAT_DTYPES):
             raise ValueError("Unsupported type{}".format(mantissa_dtype))
-        # Builds the exponent array
+        # Builds the field-array
         is_complex = mantissa_dtype in Xrange_array._COMPLEX_DTYPES
         sh = mantissa.shape
-
         if is_complex:
             if exp_re is None:
                 exp_re = np.zeros(sh, dtype=np.int32)
@@ -254,7 +258,7 @@ Reference:
         try:
             return np.asarray(self["exp_re"])
         except IndexError: # We are view casting a np.ndarray
-            return np.zeros([], dtype=np.int32)
+            return np.int32(0) #np.zeros([], dtype=np.int32)
 
     @property
     def _exp_im(self):
@@ -262,7 +266,7 @@ Reference:
         try:
             return np.asarray(self["exp_im"])
         except (IndexError, ValueError): # We are view casting a np.array
-            return np.zeros([], dtype=np.int32)
+            return np.int32(0) #np.zeros([], dtype=np.int32)
 
     @property
     def _exp(self):
@@ -351,30 +355,8 @@ Reference:
             elif ufunc is np.true_divide:
                 return self._div(*casted_inputs)
             elif ufunc in [np.greater, np.greater_equal, np.less,
-                           np.less_equal]:
+                           np.less_equal, np.equal, np.not_equal]:
                 return self._compare(*casted_inputs, ufunc=ufunc)
-            elif ufunc is np.equal:
-                # Unfortunately at parent class implementation level, a call to
-                # np.equal with a structured nd.array will result in n_field
-                # calls to np.equal, one for each field. 
-                # (as of np.__version__ == '1.19.3').
-                # Here we need both matissa and exponenent together to decide
-                # equality: unicity of the reprensentation is not guaranteed.
-                # The below work-around will perform element-wise comparison of
-                # of 2 Xrange_arrays, but will not handle mixed cases
-                # one Xrange_array with one np.ndarray (an error is 
-                # raised)
-                cmp0, cmp1 = inputs
-                if cmp0.dtype == np.int32: # Skip this one, done with mantissa
-                    assert cmp1.dtype == np.int32
-                    return np.ones(cmp0.shape, dtype=np.bool)
-                try:
-                    return self._compare(cmp0.base.view(Xrange_array),
-                                         cmp1.base.view(Xrange_array),
-                                         ufunc=ufunc)
-                except AttributeError:
-                    raise TypeError("Can only test equality of 2 "
-                                    "Xrange_arrays")
             elif ufunc is np.absolute:
                 return self._abs(*casted_inputs)
             elif ufunc is np.sqrt:
@@ -508,7 +490,19 @@ Reference:
         cmp0, cmp1 = inputs
         is_complex = (cmp0.is_complex or cmp1.is_complex)
         if is_complex:
-            raise NotImplementedError("Won't handle complex comparison op.")
+            if ufunc in [np.equal, np.not_equal]:
+                re_eq = Xrange_array._coexp_ufunc(
+                        cmp0._mantissa.real, cmp0._exp_re,
+                        cmp1._mantissa.real, cmp1._exp_re, ufunc)[0]
+                im_eq = Xrange_array._coexp_ufunc(
+                        cmp0._mantissa.imag, cmp0._exp_im,
+                        cmp1._mantissa.imag, cmp1._exp_im, ufunc)[0]
+                if ufunc is np.equal:
+                    return re_eq & im_eq
+                return re_eq | im_eq
+            else:
+                raise NotImplementedError(
+                    "{} Not supported for complex".format(ufunc))
         else:
             return Xrange_array._coexp_ufunc(cmp0._mantissa, cmp0._exp_re,
                                              cmp1._mantissa, cmp1._exp_re,
@@ -621,19 +615,33 @@ Reference:
             m0, exp0, m1, exp1, -> ufunc(co_m0, co_m1), co_exp
         """
         co_m0, co_m1 = np.copy(np.broadcast_arrays(m0, m1))
+        scalar_shape = (co_m0.shape is tuple())
+        
         exp0, exp1 = np.broadcast_arrays(exp0, exp1)
         m0_null = (m0 == 0.)
         m1_null = (m1 == 0.)
         d_exp = exp0 - exp1
 
-        bool0 = ((exp1 > exp0) & ~m1_null)
-        co_m0[bool0] = Xrange_array._exp2_shift(co_m0[bool0], d_exp[bool0])
-        bool1 = ((exp0 > exp1) & ~m0_null)
-        co_m1[bool1] = Xrange_array._exp2_shift(co_m1[bool1], -d_exp[bool1])
-
-        exp = np.maximum(exp0, exp1)
-        exp[m0_null] = exp1[m0_null]
-        exp[m1_null] = exp0[m1_null]
+        if scalar_shape:
+            if ((exp1 > exp0) & ~m1_null):
+                co_m0 = Xrange_array._exp2_shift(co_m0, d_exp)
+            if ((exp0 > exp1) & ~m0_null):
+                co_m1 = Xrange_array._exp2_shift(co_m1, -d_exp)
+            exp = np.maximum(exp0, exp1)
+            if m0_null:
+                exp = exp1
+            if m1_null:
+                exp = exp0
+        else:
+            bool0 = ((exp1 > exp0) & ~m1_null)
+            co_m0[bool0] = Xrange_array._exp2_shift(
+                    co_m0[bool0], d_exp[bool0])
+            bool1 = ((exp0 > exp1) & ~m0_null)
+            co_m1[bool1] = Xrange_array._exp2_shift(
+                    co_m1[bool1], -d_exp[bool1])
+            exp = np.maximum(exp0, exp1)
+            exp[m0_null] = exp1[m0_null]
+            exp[m1_null] = exp0[m1_null]
 
         if ufunc is not None: 
             return (ufunc(co_m0, co_m1), exp)
@@ -787,36 +795,64 @@ Reference:
         exp10 int32 exponent in base 10
 
         Note : 
-        This is nothing more than a high-precision version of:
-            > r = 0.3010299956639812 # math.log10(2)
+        This is a high-precision version of:
+            > r = math.log10(2)
             > exp10, mod = np.divmod(exp2 * r, 1.)
             > return m2 * 10.**mod, exp10
 
-        However, to guarantee an accuracy > 15 digits (in reality, close to 16)
+        In order to guarantee an accuracy > 15 digits (in reality, close to 16)
         for `mod` with the 9-digits highest int32 base 2 exponent (2**31 - 1)
-        we need an overall precision of 25 digits for this divmod.
+        we use an overall precision of 87 bits for this divmod.
+
+        https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html
         """
-        # We will divide 'by hand' in base 10.
+        # We will divide 'by hand' in base 2**29 (chosen so that exp2 * ri does
+        # not overflow an int64 with the largest exp2 == 2**31-1), ri < 2**29.
         # >>> import mpmath
         # >>> mpmath.mp.dps = 30
-        # >>> mpmath.log("2.") / mpmath.log("10.") * mpmath.mpf("1.e25")
-        # mpf('3010299956639811952137388.94724503')
-        r_e = "3010299956639811952137388"
-        d = np.zeros_like(exp2, dtype=np.int64)
-        m = np.zeros_like(exp2, dtype=np.float64)
-        mm = np.zeros_like(exp2, dtype=np.float64)
-        for i in range(25):
-            mi = exp2 * float(r_e[i]) # double precision
-            if (i + 1) <= 10: # mi_ is clearly below 9. * (2**32 - 1)
-                              # so not worth checking above 10**10
-                raise_integer = (np.abs(mi) >= 10.**(i + 1))
-                di, mi[raise_integer] = np.divmod(
-                        mi[raise_integer], 10.**(i + 1))
-                d[raise_integer] += di.astype(np.int64)
-            if i < 10:  # before reaching max exact integer for float64
-                m = m * 10. + mi
-            else:       # switch to 2nd part (avoid accumulating addition err)
-                mm = mm * 10. + mi
-        m = (m  + mm * 1e-15) * 1.e-10
-        d_m, m = np.divmod(m, 1.) # Accumulate of below 1. can reach 1.
+        # >>> mpmath.log("2.") / mpmath.log("10.") * mpmath.mpf(2**87)
+        # mpf('46582135582293341826703958.4180145')
+        r_hex = 46582135582293341826703958
+        mm = [None] * 3
+        for i in range(3):
+            ri = (r_hex >> (29 * (2 - i))) & int(2**29 - 1)
+            mm[i] = exp2.astype(np.int64) * ri
+            if i == 0: # extract the integer
+                di, mm[i] = np.divmod(mm[i], 2**29)
+                d = di.astype(np.int64)
+        m = (mm[0] + (mm[1] + mm[2] * 2.**-29) * 2.**-29) * 2**-29
+        d_m, m = np.divmod(m, 1.)
         return  m2 * 10.**m, (d + d_m).astype(np.int32)
+
+
+    def __setitem__(self, key, value):
+        """ Can be given either a Xrange_array or a complex of float array-like
+        (See 'supported types')
+        """
+        if type(value) is not Xrange_array:
+            value = Xrange_array(np.asarray(value))
+        if self.is_complex and not(value.is_complex):
+            np.ndarray.__setitem__(self.real, key, value)
+            np.ndarray.__setitem__(self.imag, key, np.zeros_like(value))
+            return
+        if not(self.is_complex) and value.is_complex: 
+            raise ValueError("Can't assign complex values to a real"
+                             " Xrange_array")
+        np.ndarray.__setitem__(self, key, value)
+
+    def __getitem__(self, key):
+        """ For single item, return array of empty shape rather than a scalar,
+        to allow pretty print and maintain assignement behaviour consistent.
+        """
+        res = np.ndarray.__getitem__(self, key)
+        if np.isscalar(res):
+            return np.asarray(res).view(Xrange_array)
+        return res
+
+    def __eq__(self, other):
+        """Ensure that all ne are handled at Xrange_array level"""
+        return np.equal(self, other)
+
+    def __ne__(self, other):
+        """Ensure that all eq at Xrange_array level"""
+        return np.not_equal(self, other)

@@ -15,7 +15,7 @@ def _matching(res, expected, almost=False, dtype=None, cmp_op=False, ktol=1.5):
 
 
 
-def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.5):
+def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.0):
     print("testing function", ufunc)
     rg = np.random.default_rng(100)
 
@@ -107,7 +107,7 @@ def _test_op2(ufunc, almost=False, cmp_op=False):
         if ufunc in [np.add, np.multiply, np.subtract, np.divide]:
             assert res._mantissa.dtype == dtype
 
-        if ufunc != np.equal:
+        if ufunc not in [np.equal, np.not_equal]:
             _matching(ufunc(op1, Xrange_array(op2)),
                       expected, almost, dtype, cmp_op)
             _matching(ufunc(Xrange_array(op1), op2),
@@ -123,12 +123,21 @@ def _test_op2(ufunc, almost=False, cmp_op=False):
                         Xrange_array(op2, -exp_shift_array)),
                   expected, almost, dtype, cmp_op)
         # testing operation of an Xrange_array with a scalar
-        if ufunc != np.equal:
+        if ufunc not in [np.equal, np.not_equal]:
             expected = ufunc(op1[0], op2)
             _matching(ufunc(op1[0], Xrange_array(op2)),
                       expected, almost, dtype, cmp_op)
             expected = ufunc(op2, op1[0])
             _matching(ufunc(Xrange_array(op2), op1[0]),
+                      expected, almost, dtype, cmp_op)
+            
+        # testing operation of an Xrange_array with a "Xrange" scalar
+        if ufunc not in [np.equal, np.not_equal]:
+            expected = ufunc(op1[0], op2)
+            _matching(ufunc(Xrange_array(op1)[0], Xrange_array(op2)),
+                      expected, almost, dtype, cmp_op)
+            expected = ufunc(op2, op1[0])
+            _matching(ufunc(Xrange_array(op2), Xrange_array(op1)[0]),
                       expected, almost, dtype, cmp_op)
     if cmp_op:
         return
@@ -203,7 +212,7 @@ def test_ops():
     _test_op2(np.divide, almost=True)
 
     for ufunc in [np.greater, np.greater_equal, np.less,
-                  np.less_equal, np.equal]:
+                  np.less_equal, np.equal, np.not_equal]:
         _test_op2(ufunc, cmp_op=True)
 
     for ufunc in [np.abs, np.sqrt, np.square, np.conj, np.log]:
@@ -234,19 +243,59 @@ def test_edge_cases():
     base = - np.ones([40], dtype=np.float64)
     base = np.linspace(0., 1., 40, dtype=np.float64)
     base2 = base + np.linspace(-1., 1., 40) * np.finfo(np.float64).eps
-    exp = np.ones(40, dtype=np.int32)
-    _base = Xrange_array(base, exp)
+    exp = np.zeros(40, dtype=np.int32)
 
+    _base = Xrange_array(base, exp)
     _base2 = Xrange_array(base2 * 2., exp - 1)
+#    print("######################1")
+#    print("_base", _base)
+#    print("_base2", _base2)
+#    print("== ref: ", base == base2)
     np.testing.assert_array_equal(_base == _base2, base == base2)
+    np.testing.assert_array_equal(_base == base2, base == base2)
+   # print("######################1.1")
+    np.testing.assert_array_equal(_base[:2] == _base2[:2], base[:2] == base2[:2])
+#    print("!=", _base != _base2)
+#    print("ref: ", base != base2)
+    np.testing.assert_array_equal(_base != _base2, base != base2)
     np.testing.assert_array_equal(_base <= _base2, base <= base2)
     np.testing.assert_array_equal(_base >= _base2, base >= base2)
     np.testing.assert_array_equal(_base < _base2, base < base2)
     np.testing.assert_array_equal(_base > _base2, base > base2)
 
     _base2 = Xrange_array(base2 / 2., exp + 1)
+    np.testing.assert_array_equal(_base != _base2, base != base2)
+ #   print("######################2")
     np.testing.assert_array_equal(_base == _base2, base == base2)
     np.testing.assert_array_equal(_base > _base2, base > base2)
+  #  print("######################exit")
+    _base = _base * (1. +1.j)
+    _base2 = _base2 * (1. +1.j)
+    base = base * (1. +1.j)
+    base2 = base2 * (1. +1.j)
+    np.testing.assert_array_equal(_base == _base2, base == base2)
+    np.testing.assert_array_equal(_base != _base2, base != base2)
+    np.testing.assert_array_equal(_base[2] != _base2[2], base[2] != base2[2])
+    np.testing.assert_array_equal(_base[20] != _base2[20],
+                                  base[20] != base2[20])
+    np.testing.assert_array_equal(_base[20] == _base2[20],
+                                  base[20] == base2[20])
+    np.testing.assert_array_equal(_base.real == _base2.real,
+                                  base.real == base2.real)
+    np.testing.assert_array_equal(_base.real != _base2.real,
+                                  base.real != base2.real)
+    np.testing.assert_array_equal(_base[20].real == _base2[20].real,
+                                  base[20].real == base2[20].real)
+    np.testing.assert_array_equal(_base.real[20] == _base2.real[20],
+                                  base.real[20] == base2.real[20])
+    np.testing.assert_array_equal(_base.real <= _base2.real,
+                                  base.real <= base2.real)
+    np.testing.assert_array_equal(_base[20].real <= _base2[20].real,
+                                  base[20].real <= base2[20].real)
+    np.testing.assert_array_equal(_base[2].real <= _base2[2].real,
+                                  base[2].real <= base2[2].real)
+#    print(_base != _base2)
+#    print(_base2)
 
 
 
@@ -266,13 +315,21 @@ def test_template_view():
 
     # b is a full copy not a view
     b11_val = b[11]
+#    print(b11_val.is_complex)
+#    print(b[11].is_complex)
+#    print("cmp", Xrange_array._compare(b11_val, b[11], ufunc=np.equal))
+#    print(b11_val, b[11])
     assert b[11] == b11_val#(5.0 + 0.j, 0, 0)
     m = b._mantissa
     assert m[11] == 5.
+    assert a[11] != 10.
     a[11] = 10.
     assert b[11] == b11_val
     # you have to make a new instance to see the modification
     b = Xrange_array(a)
+    print(b[11], b11_val, b[11] == b11_val)
+    print(b[11].real, b11_val.real, b[11].real == b11_val.real)
+    print(b[11].imag, b11_val.imag, b[11].imag == b11_val.imag)
     assert b[11] != b11_val
     m = b._mantissa
     assert m[11] == 10.
@@ -284,12 +341,14 @@ def test_template_view():
     assert c._mantissa.shape == a[10:].shape
     assert c._exp_re.shape == a[10:].shape
     # modifying subarray modifies array
-    new_val = (12345., 6, 7)
-    c[1] = new_val
+    new_val = (12345.+0.j, 6, 7)
+#    print(Xrange_array(*new_val).__repr__())
+#    print(c[1].__repr__())
+    c[1] = Xrange_array(*new_val)
     assert b[11] == c[1]
     # modifying array modifies subarray
-    new_val = (98765., 4, 3)
-    b[10] = new_val
+    new_val = (98765.+0.j, 4, 3)
+    b[10] = Xrange_array(*new_val)
     assert b[10] == c[0]
 
     # Testing Xrange_array from view
@@ -306,14 +365,14 @@ def test_template_view():
     # Check that imag and real are views of the original array 
     e = Xrange_array(a + 2.j * a)
     assert e.to_standard()[4] == (20. + 40.j) / 11.
-    e.real[4] = (np.pi, 0)
-    e.imag[4] = (-np.pi, 0)
+    e.real[4] = Xrange_array(np.pi, 0)
+    e.imag[4] = Xrange_array(-np.pi, 0)
 
     assert e.to_standard()[4] == (1. - 1.j) * np.pi
     bb = Xrange_array(np.linspace(0., 5., 12, dtype=np.float64))
     
     np.testing.assert_array_equal(bb.real, bb)
-    bb.real[0] = (1.875, 6)  # 120...
+    bb.real[0] = Xrange_array(1.875, 6)  # 120...
     assert bb.to_standard()[0] == 120.
     np.testing.assert_array_equal(bb.imag.to_standard(), 0.)
 
@@ -402,6 +461,11 @@ def timing_op2_complex(ufunc, dtype=np.float64):
     t1 = - time.time()
     expected = ufunc(op1, op2)
     t1 += time.time()
+    
+#    t2 = - time.time()
+#    _ = ufunc(np.copy(op1.astype(np.float128)), 
+#                     np.copy(op2.astype(np.float128)))
+#    t2 += time.time()
 
     np.testing.assert_array_equal(e_res.to_standard(), expected)
     print("timing", ufunc, t0, t1, "ratio:", t0/t1)
@@ -486,6 +550,7 @@ def test_print():
         assert Xb.__str__() == str6b
         
     # Testing accuracy of mantissa for highest exponents    
+
     Xa = Xrange_array([["1.0e+646456992", "1.23456789012345e+646456992"], 
                        ["1.0e+646456991", "1.23456789012345e+646456991"], 
                        ["1.0e+646456990", "1.23456789012345e+646456990"],
@@ -497,14 +562,31 @@ def test_print():
         " [-1.00000000000000e-646456991  1.23456789012345e-646456991]\n"
         " [ 1.00000000000000e-646456992  1.23456789012345e-646456992]]")
     with np.printoptions(precision=14, linewidth=100) as _:
+#        print(Xa)
         assert Xa.__str__() == str_14
+#    with np.printoptions(precision=16, linewidth=100) as _:
+#        print(Xa) #.__str__() == str_13
 
     Xb = np.array([1., -1.j]) * np.pi * Xrange_array(
             ["1.e+646456991","1.e-646456991" ])
-    str_13 = ("[ 3.1415926535898e+646456991➕0.0000000000000e+000000000j\n"
-             "  0.0000000000000e+000000000➖3.1415926535898e-646456991j]")
-    with np.printoptions(precision=13, linewidth=100) as _:
-        assert Xb.__str__() == str_13
+    str_14 = ("[ 3.14159265358979e+646456991➕0.00000000000000e+000000000j\n"
+             "  0.00000000000000e+000000000➖3.14159265358979e-646456991j]")
+    with np.printoptions(precision=14, linewidth=100) as _:
+        assert Xb.__str__() == str_14
+#    with np.printoptions(precision=14, linewidth=100) as _:
+#        print(Xb) #.__str__() == str_13
+        
+def test_item_assignment():
+    Xa = Xrange_array(["1.0e1002", "2.0e1000" ])
+
+    with np.printoptions(precision=10, linewidth=100) as _:
+#        print(Xa[0])
+        assert Xa[0].__str__() == " 1.0000000000e+1002"
+        assert type(Xa[0]) is Xrange_array
+
+    Xa[0] = Xrange_array("9.876543e-999")
+    with np.printoptions(precision=10, linewidth=100) as _:
+        assert Xa.__str__() == "[ 9.8765430000e-0999  2.0000000000e+1000]"
 
     
 if __name__ == "__main__":
@@ -513,8 +595,9 @@ if __name__ == "__main__":
     timing_op2_complex(np.multiply)
     timing_abs2_complex(dtype=np.float64)
 
-
     test_template_view()
+    test_item_assignment()
+    
     test_ops()
     test_edge_cases()
     test_underflow()
