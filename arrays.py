@@ -67,16 +67,18 @@ Implementation details:
         imag    view of imaginary part, as a real Xrange_array
         is_complex  Boolean scalar
 
-    The binary operations implemented are :
+    The binary operations implemented are:
         +, -, *, /, <, <=, >, >=
+    also the matching 'assignment' operators:
+        +=, -=, *=, /=
 
     The unary operations implemented are :
         as unfunc : abs, sqrt, square, conj, log
         as instance method : abs2 (square of abs)
 
-    Xrange_array will silently over/underflow, given the implementation of the
-    exponent as np.int32 array. If needed, checking for overflow shall be
-    implemented in user code.
+    Xrange_array will silently over/underflow, due to the implementation of its
+    exponent as a np.int32 array. If needed, checks for overflow shall be
+    done in user code.
         >>> np.int32(2**31)
         -2147483648
 
@@ -132,20 +134,16 @@ Reference:
                             "represent exponent with int32, maxint 2**31-1")
                 except ValueError:
                     raise ValueError(err_msg.format(input_str))
-    # Need extra precision for this division, will use Python native integers.
+    # Need 96 bits precision for this division, will use Python integers, as
+    # speed is not critical here.
     # >>> import mpmath
     # >>> mpmath.mp.dps = 30
     # >>> mpmath.log("10.") / mpmath.log("2.") * mpmath.mpf("1.e25")
-    # mpf('33219280948873623478703194.2948914')
-    # mpmath.log("10.") / mpmath.log("2.") * mpmath.mpf(2**86)
-    # mpf('32127717158500545300342142.8746567')
-#                rr_e = 33219280948873623478703194
-#                e25 = 10000000000000000000000000
-                rr_hex = 514043474536008724805474285
-                #e83 = 2**84
-                #exp_10, mod = divmod(exp_10 * rr_e, e25)
-                exp_10, mod = divmod(exp_10 * rr_hex, 2**87)
-                m *= 2.**(mod * 2.**-87)
+    # mpmath.log("10.") / mpmath.log("2.") * mpmath.mpf(2**96)
+    # mpf('263190258962436467100402834429.2138584375862')
+                rr_hex = 263190258962436467100402834429
+                exp_10, mod = divmod(exp_10 * rr_hex, 2**96)
+                m *= 2.**(mod * 2.**-96)
             return m, exp_10
         else:
             raise ValueError(err_msg.format(input_str))
@@ -158,7 +156,8 @@ Reference:
         mantissa_dtype = mantissa.dtype
         if mantissa_dtype not in (Xrange_array._COMPLEX_DTYPES +
                                   Xrange_array._FLOAT_DTYPES):
-            raise ValueError("Unsupported type{}".format(mantissa_dtype))
+            raise ValueError("Unsupported type for Xrange_array {}".format(
+                    mantissa_dtype))
         # Builds the field-array
         is_complex = mantissa_dtype in Xrange_array._COMPLEX_DTYPES
         sh = mantissa.shape
@@ -213,6 +212,10 @@ Reference:
         else:
             return self
 
+    @real.setter
+    def real(self, value):
+        self.real[:] = value
+
     @property
     def imag(self):
         """
@@ -235,6 +238,31 @@ Reference:
         else:
             return 0. * self
 
+    @imag.setter
+    def imag(self, value):
+        self.imag[:] = value
+
+    @staticmethod
+    def empty(shape, dtype, asarray=False):
+        """ Return a new Xrange_array of given shape and type, without
+        initializing entries.
+        
+        if asarray is True, return a view as an array, otherwise (default)
+        return a Xrange_array
+        """
+        is_complex = dtype in Xrange_array._COMPLEX_DTYPES
+        if is_complex:
+            extended_dtype = np.dtype([('mantissa', dtype),
+                                       ('exp_re', np.int32),
+                                       ('exp_im', np.int32)], align=False)
+        else:
+            extended_dtype = np.dtype([('mantissa', dtype),
+                                       ('exp_re', np.int32)], align=False)
+        if asarray:
+            return np.empty(shape, dtype=extended_dtype)
+        else:
+            return np.empty(shape, dtype=extended_dtype).view(Xrange_array)
+
     def to_standard(self):
         """ Returns the Xrange_array downcasted to standard np.ndarray ;
         obviously, may overflow. """
@@ -243,6 +271,17 @@ Reference:
                    1j * self._mantissa.imag * (2.**self._exp_im))
         else:
             return (self._mantissa * (2.**self._exp_re))
+
+    @staticmethod
+    def _build_complex(re, im):
+        """ Build a complex Xrange_array from 2 similar shaped and typed
+        Xrange_array (imag and real parts)"""
+        m_re = re._mantissa
+        dtype = np.complex128 if (m_re.dtype == np.float64) else np.complex64
+        c = np.empty(m_re.shape, dtype=dtype)
+        c.real = m_re
+        c.imag = im._mantissa
+        return Xrange_array(c, re._exp_re, im._exp_re)
 
     @property
     def _mantissa(self):
@@ -277,22 +316,6 @@ Reference:
             return self._exp_re
 
     @staticmethod
-    def _normalize_inplace(f, exp):
-        """
-        Parameters
-        f is a float32 or float64 array
-        exp is a int32 array
-
-        Return None
-
-        Modifies in place (f, exp) to (nf, nexp) so that
-            f * 2**exp == nf * 2**nexp
-            .5 <= abs(nf) < 1.
-        """
-        f[:], exp2 = np.frexp(f)
-        exp += exp2
-
-    @staticmethod
     def _normalize(f, exp):
         """
         Parameters
@@ -305,8 +328,9 @@ Reference:
             f * 2**exp == nf * 2**nexp
             .5 <= abs(nf) < 1.
         """
-        ff, exp2 = np.frexp(f)
-        return ff, (exp + exp2)
+        f, exp2 = np.frexp(f)
+        exp = np.where(f == 0., 0, exp + exp2)
+        return f, exp
 
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
@@ -324,9 +348,11 @@ Reference:
         see also:
     https://github.com/numpy/numpy/blob/v1.19.0/numpy/lib/mixins.py#L59-L176
         """
-        if "out" in kwargs.keys():
-            raise NotImplementedError("ufunc with parameter 'out' not"
-                                      "implemented for Xrange_array")
+        out = kwargs.pop("out", None)
+        if out is not None:
+            if ufunc.nout == 1: # Only supported case to date
+                out = np.asarray(out[0])
+
         casted_inputs = ()
         for x in inputs:
             # Only support operations with instances of _HANDLED_TYPES.
@@ -337,273 +363,280 @@ Reference:
             elif isinstance(x, numbers.Number):
                 casted_inputs += (Xrange_array(x),)
             elif isinstance(x, list):
-                casted_inputs += (Xrange_array(np.asarray(x)),)
+                casted_inputs += (Xrange_array(x),)
             else:
                 raise NotImplementedError("Xrange_array view not handled for "
                     "this type {}, supported types : {}.".format(
                             type(x), Xrange_array._HANDLED_TYPES))
 
         if method == "__call__":
-            if ufunc is np.add:
-                return self._add(*casted_inputs)
+            if ufunc in [np.add, np.subtract]:
+                return self._add(ufunc, *casted_inputs, out=out)
             elif ufunc is np.negative:
-                return self._negative(*casted_inputs)
-            elif ufunc is np.subtract:
-                return self._subtract(*casted_inputs)
-            elif ufunc is np.multiply:
-                return self._mul(*casted_inputs)
-            elif ufunc is np.true_divide:
-                return self._div(*casted_inputs)
+                return self._negative(*casted_inputs, out=out)
+            elif ufunc in [np.multiply, np.true_divide]:
+                return self._mul(ufunc, *casted_inputs)
             elif ufunc in [np.greater, np.greater_equal, np.less,
                            np.less_equal, np.equal, np.not_equal]:
-                return self._compare(*casted_inputs, ufunc=ufunc)
-            elif ufunc is np.absolute:
-                return self._abs(*casted_inputs)
-            elif ufunc is np.sqrt:
-                return self._sqrt(*casted_inputs)
-            elif ufunc is np.square:
-                return self._square(*casted_inputs)
-            elif ufunc is np.conj:
-                return self._conj(*casted_inputs)
-            elif ufunc is np.log:
-                return self._log(*casted_inputs)
-            else:
-                raise NotImplementedError(ufunc)
-        else:
-            raise NotImplementedError(method)
+                return self._compare(ufunc, *casted_inputs, out=out)
 
-    def abs2(self):
+            elif ufunc is np.absolute:
+                return self._abs(*casted_inputs, out=out)
+            elif ufunc is np.sqrt:
+                return self._sqrt(*casted_inputs, out=out)
+            elif ufunc is np.square:
+                return self._square(*casted_inputs, out=out)
+            elif ufunc is np.conj:
+                return self._conj(*casted_inputs, out=out)
+            elif ufunc is np.log:
+                return self._log(*casted_inputs, out=out)
+
+        elif method == "reduce" and ufunc is np.add:
+            return self._add_reduce(*casted_inputs, out=out, **kwargs)
+
+        else:
+            raise NotImplementedError("ufunc {} method {} not implemented for "
+                                      "Xrange_array".format(ufunc, method))
+
+    def abs2(self, out=None):
         """
         Return the square of np.abs(self) (for optimisation purpose).
         """
+        if out is None:
+            out = Xrange_array.empty(self.shape,
+                    dtype=self._mantissa.real.dtype, asarray=True)
+
         if self.is_complex:
-            return Xrange_array(*Xrange_array._normalize(
+            out["mantissa"], out["exp_re"] = Xrange_array._normalize(
                 *Xrange_array._coexp_ufunc(
                     self._mantissa.real**2, 2 * self._exp_re,
-                    self._mantissa.imag**2, 2 * self._exp_im, np.add)))
+                    self._mantissa.imag**2, 2 * self._exp_im, np.add))
         else:
-            return Xrange_array(*Xrange_array._normalize(
-                    self._mantissa**2, 2 * self._exp_re))
+            out["mantissa"], out["exp_re"] = Xrange_array._normalize(
+                    self._mantissa**2, 2 * self._exp_re)
+        return out.view(Xrange_array)
 
     @staticmethod
-    def _conj(*inputs):
+    def _conj(*inputs, out=None):
         """ x -> np.conj(x) """
-        c0, = inputs
-        if c0.is_complex:
-            return Xrange_array(np.conj(c0._mantissa), c0._exp_re,
-                                       c0._exp_im)
-        else:
-            return np.copy(c0).view(Xrange_array)
+        op0, = inputs
+        m0 = op0._mantissa
+        if out is None:
+            out = Xrange_array.empty(m0.shape, dtype=m0.dtype, asarray=True)
+
+        out["mantissa"] = np.conj(op0._mantissa)
+        out["exp_re"] = op0._exp_re
+        if op0.is_complex:
+            out["exp_im"] = op0._exp_im
+        return out.view(Xrange_array)
 
     @staticmethod
-    def _square(*inputs):
+    def _square(*inputs, out=None):
         """ x -> x**2  """
-        sq0, = inputs
-        if sq0.is_complex:
-            # real part
+        op0, = inputs
+        m0 = op0._mantissa
+        exp0_re = op0._exp_re
+        exp0_im = op0._exp_im
+        if out is None:
+            out = Xrange_array.empty(m0.shape, dtype=m0.dtype, asarray=True)
+
+        if op0.is_complex:
             m_re, exp_re = Xrange_array._coexp_ufunc(
-                    np.square(sq0._mantissa.real), 2 * sq0._exp_re,
-                    -np.square(sq0._mantissa.imag), 2 * sq0._exp_im, np.add)
-            Xrange_array._normalize_inplace(m_re, exp_re)
-            # imaginary part
-            m_im, exp_im = Xrange_array._normalize(
-                    2 * sq0._mantissa.real * sq0._mantissa.imag,
-                    sq0._exp_re + sq0._exp_im)
-            dtype = np.complex128 if (m_re.dtype == np.float64
-                                      ) else np.complex64
-            m = np.empty(m_re.shape, dtype=dtype)
-            m.real = m_re
-            m.imag = m_im
-            return Xrange_array(m, exp_re, exp_im)
+                    np.square(m0.real), 2 * exp0_re,
+                    -np.square(m0.imag), 2 * exp0_im, np.add)
+            out["mantissa"].real, out["exp_re"] = Xrange_array._normalize(
+                    m_re, exp_re)
+            out["mantissa"].imag, out["exp_im"] = Xrange_array._normalize(
+                    2 * m0.real * m0.imag, exp0_re + exp0_im)
         else: # real case
-            return Xrange_array(*Xrange_array._normalize(
-                    sq0._mantissa**2, 2 * sq0._exp_re))
+            out["mantissa"], out["exp_re"] = Xrange_array._normalize(
+                    np.square(m0), 2 * exp0_re)
+        return out.view(Xrange_array)
 
     @staticmethod
-    def _log(*inputs):
+    def _log(*inputs, out=None):
         """ x -> np.log(x)  """
-        log0, = inputs
+        op0, = inputs
+        m0 = op0._mantissa
+        if out is None:
+            out = Xrange_array.empty(m0.shape, dtype=m0.dtype, asarray=True)
+
         ln2 = 0.6931471805599453
-        if log0.is_complex:
-            m_re, exp_re = Xrange_array._normalize(
-                    log0._mantissa.real, log0._exp_re)
+        if op0.is_complex:
+            m_re, exp_re = Xrange_array._normalize(m0.real, op0._exp_re)
             m_im, exp_im = Xrange_array._normalize(
-                    log0._mantissa.imag, log0._exp_im)
+                    m0.imag, op0._exp_im)
             m_re *= 2.
             exp_re -= 1
-            m_re, m_im, exp = Xrange_array._coexp_ufunc(
-                    m_re, exp_re, m_im, exp_im, None)
+            m_re, m_im, e = Xrange_array._coexp_ufunc(m_re, exp_re, m_im,
+                                                      exp_im, None)
             m = m_re + 1.j * m_im
-            # Avoid loss of significant digits if e * ln2 close to log(m)
-            # ie m close to 2.0
-            e_is_m1 = (exp == -1)
-            m[e_is_m1] *= 0.5
-            exp[e_is_m1] += 1
-            return Xrange_array(np.log(m) + m_re.dtype.type(exp * ln2))
+            out["exp_im"] = 0
         else:
-            m, e = Xrange_array._normalize(log0._mantissa, log0._exp_re)
+            m, e = Xrange_array._normalize(m0, op0._exp_re)
             m *= 2.
             e -= 1
-            # Avoid loss of significant digits if e * ln2 close to log(m)
-            # ie m close to 2.0
-            e_is_m1 = (e == -1)
-            m [e_is_m1] *= 0.5
-            e [e_is_m1] += 1
-            return Xrange_array(np.log(m) + m.dtype.type(e * ln2))
+            m_re = m
+
+        # Avoid loss of significant digits if e * ln2 close to log(m)
+        # ie m close to 2.0
+        e_is_m1 = (e == -1)
+        if np.isscalar(m):
+            if e_is_m1:
+                m[e_is_m1] *= 0.5
+                e[e_is_m1] += 1
+        else:
+            m[e_is_m1] *= 0.5
+            e[e_is_m1] += 1
+
+        out["mantissa"] = np.log(m) + m_re.dtype.type(e * ln2)
+        out["exp_re"] = 0
+        return out.view(Xrange_array)
 
     @staticmethod
-    def _sqrt(*inputs):
+    def _sqrt(*inputs, out=None):
         """ x -> np.sqrt(x)  """
         sqrt0, = inputs
+        m0 = sqrt0._mantissa
+        if out is None:
+            out = Xrange_array.empty(m0.shape, dtype=m0.dtype, asarray=True)
         
         if sqrt0.is_complex:
             m_re, m_im, exp = Xrange_array._coexp_ufunc(
-                    sqrt0._mantissa.real, sqrt0._exp_re,
-                    sqrt0._mantissa.imag, sqrt0._exp_im, None)
+                    m0.real, sqrt0._exp_re,
+                    m0.imag, sqrt0._exp_im, None)
             m = m_re + 1.j * m_im
             even_exp = ((exp % 2) == 0).astype(np.bool)
             exp = np.where(even_exp, exp // 2, (exp - 1) // 2)
-            return Xrange_array(
-                np.sqrt(np.where(even_exp, m, m * 2.)), exp, exp)
+            out["mantissa"] = np.sqrt(np.where(even_exp, m, m * 2.))
+            out["exp_re"] = exp
+            out["exp_im"] = exp
         else:
             even_exp = ((sqrt0._exp_re % 2) == 0).astype(np.bool)
-            return Xrange_array(
-                np.sqrt(np.where(even_exp, sqrt0._mantissa,
-                                 sqrt0._mantissa * 2.)
-                ), np.where(even_exp, sqrt0._exp_re // 2,
-                            (sqrt0._exp_re - 1) // 2))
+            out["mantissa"] = np.sqrt(np.where(even_exp, sqrt0._mantissa,
+                                 sqrt0._mantissa * 2.))
+            out["exp_re"] = np.where(even_exp, sqrt0._exp_re // 2,
+                    (sqrt0._exp_re - 1) // 2)
+        return out.view(Xrange_array)
 
     @staticmethod
-    def _abs(*inputs):
+    def _abs(*inputs, out=None):
         """ x -> np.abs(x) """
-        abs0, = inputs
-        if abs0.is_complex:
-            return np.sqrt((abs0.real * abs0.real +
-                            abs0.imag * abs0.imag))
+        op0, = inputs
+        m0 = op0._mantissa
+        exp0_re = op0._exp_re
+
+        if out is None:
+            out = Xrange_array.empty(m0.shape, dtype=m0.real.dtype,
+                                     asarray=True)
+        if op0.is_complex:
+            Xrange_array._sqrt((op0.real * op0.real + op0.imag * op0.imag),
+                               out=out)
         else:
-            return Xrange_array(np.abs(abs0._mantissa), abs0._exp_re)
-        raise NotImplementedError
+            out["mantissa"] = np.abs(m0)
+            out["exp_re"] = exp0_re
+        return out.view(Xrange_array)
 
     @staticmethod
-    def _compare(*inputs, ufunc):
+    def _compare(ufunc, *inputs, out=None):
         """ compare x and y """
-        cmp0, cmp1 = inputs
-        is_complex = (cmp0.is_complex or cmp1.is_complex)
-        if is_complex:
+        op0, op1 = inputs
+        m0 = op0._mantissa
+        m1 = op1._mantissa
+        if out is None:
+            out = np.empty(np.broadcast(m0, m1).shape, dtype=np.bool)
+
+        if (op0.is_complex or op1.is_complex):
             if ufunc in [np.equal, np.not_equal]:
                 re_eq = Xrange_array._coexp_ufunc(
-                        cmp0._mantissa.real, cmp0._exp_re,
-                        cmp1._mantissa.real, cmp1._exp_re, ufunc)[0]
+                        m0.real, op0._exp_re, m1.real, op1._exp_re, ufunc)[0]
                 im_eq = Xrange_array._coexp_ufunc(
-                        cmp0._mantissa.imag, cmp0._exp_im,
-                        cmp1._mantissa.imag, cmp1._exp_im, ufunc)[0]
+                        m0.imag, op0._exp_im, m1.imag, op1._exp_im, ufunc)[0]
                 if ufunc is np.equal:
-                    return re_eq & im_eq
-                return re_eq | im_eq
+                    out = re_eq & im_eq
+                else:
+                    out = re_eq | im_eq
             else:
                 raise NotImplementedError(
                     "{} Not supported for complex".format(ufunc))
         else:
-            return Xrange_array._coexp_ufunc(cmp0._mantissa, cmp0._exp_re,
-                                             cmp1._mantissa, cmp1._exp_re,
-                                             ufunc)[0]
+            out = Xrange_array._coexp_ufunc(m0, op0._exp_re, m1,
+                                            op1._exp_re, ufunc)[0]
+        return out
 
     @staticmethod
-    def _div(*inputs):
-        """ (x, y) -> x / y """
-        div0, div1 = inputs
-        is_complex = (div0.is_complex or div1.is_complex)
-        return Xrange_array._aux_mul(
-                div0._mantissa, div0._exp_re, div0._exp_im,
-                1. / div1._mantissa, -div1._exp_re, -div1._exp_im, is_complex)
+    def _mul(ufunc, *inputs, out=None):
+        """ internal auxilliary function for * and / operators """
+        op0, op1 = inputs
+        m0 = op0._mantissa
+        exp0_re = op0._exp_re
+        exp0_im = op0._exp_im
+        if ufunc is np.multiply:
+            m1 = op1._mantissa
+            exp1_re = op1._exp_re
+            exp1_im = op1._exp_im
+        elif ufunc is np.true_divide:
+            m1 = 1. / op1._mantissa
+            exp1_re = -op1._exp_re
+            exp1_im = -op1._exp_im
 
-    @staticmethod
-    def _mul(*inputs):
-        """ (x, y) -> x * y """
-        mul0, mul1 = inputs
-        is_complex = (mul0.is_complex or mul1.is_complex)
-        return Xrange_array._aux_mul(
-                mul0._mantissa, mul0._exp_re, mul0._exp_im,
-                mul1._mantissa, mul1._exp_re, mul1._exp_im, is_complex)
+        if out is None:
+            out = Xrange_array.empty(np.broadcast(m0, m1).shape,
+                                   dtype=np.result_type(m0, m1), asarray=True)
 
-    @staticmethod
-    def _aux_mul(mantissa0, expb0_re, expb0_im,
-                 mantissa1, expb1_re, expb1_im, is_complex):
-        """ internal auxilliary function for / and * operators """
-
-        if is_complex:
-            # real part
+        if (op0.is_complex or op1.is_complex):
             m_re, exp_re = Xrange_array._coexp_ufunc(
-                    mantissa0.real * mantissa1.real, expb0_re + expb1_re,
-                    -mantissa0.imag * mantissa1.imag, expb0_im + expb1_im,
-                    np.add)
-            # imaginary part
+                        m0.real * m1.real, exp0_re + exp1_re,
+                        -m0.imag * m1.imag, exp0_im + exp1_im, np.add)
+            out["mantissa"].real, out["exp_re"] = Xrange_array._normalize(
+                    m_re, exp_re)
             m_im, exp_im = Xrange_array._coexp_ufunc(
-                    mantissa0.real * mantissa1.imag, expb0_re + expb1_im,
-                    mantissa0.imag * mantissa1.real, expb0_im + expb1_re,
-                    np.add)
-            Xrange_array._normalize_inplace(m_re, exp_re)
-            Xrange_array._normalize_inplace(m_im, exp_im)
-            dtype = np.complex128 if (m_re.dtype == np.float64
-                                      ) else np.complex64
-            m = np.empty(m_re.shape, dtype=dtype)
-            m.real = m_re
-            m.imag = m_im
-
-            return Xrange_array(m, exp_re, exp_im)
-
-        else: # real case
-            return Xrange_array(*Xrange_array._normalize(
-                    mantissa0 * mantissa1, expb0_re + expb1_re))
-
-    @staticmethod
-    def _subtract(*inputs):
-        """ (x, y) -> x - y """
-        sub0, sub1 = inputs
-        is_complex = (sub0.is_complex or sub1.is_complex)
-        return Xrange_array._aux_add(
-                sub0._mantissa, sub0._exp_re, sub0._exp_im,
-                -sub1._mantissa, sub1._exp_re, sub1._exp_im,
-                is_complex)
-
-    @staticmethod
-    def _negative(*inputs):
-        """ x -> -x """
-        neg, = inputs
-        return Xrange_array(-neg._mantissa, neg._exp_re, neg._exp_im)
-
-    @staticmethod
-    def _add(*inputs):
-        """ (x, y) -> x + y """
-        add0, add1 = inputs
-        is_complex = (add0.is_complex or add1.is_complex)
-        return Xrange_array._aux_add(
-                add0._mantissa, add0._exp_re, add0._exp_im,
-                add1._mantissa, add1._exp_re, add1._exp_im,
-                is_complex)
-
-    @staticmethod
-    def _aux_add(mantissa0, exp0_re, exp0_im, mantissa1, exp1_re, exp1_im,
-                 is_complex):
-        """ internal auxilliary function for + and - operators """
-        if is_complex:
-            m_re, exp_re = Xrange_array._coexp_ufunc(
-                mantissa0.real, exp0_re, mantissa1.real, exp1_re, np.add)
-            m_im, exp_im = Xrange_array._coexp_ufunc(
-                mantissa0.imag, exp0_im, mantissa1.imag, exp1_im, np.add)
-            
-            dtype = np.complex128 if (m_re.dtype == np.float64
-                                      ) else np.complex64
-            m = np.empty(m_re.shape, dtype=dtype)
-            m.real = m_re
-            m.imag = m_im
-            return Xrange_array(m, exp_re, exp_im)
+                        m0.real * m1.imag, exp0_re + exp1_im,
+                        m0.imag * m1.real, exp0_im + exp1_re, np.add)
+            out["mantissa"].imag, out["exp_im"] = Xrange_array._normalize(
+                    m_im, exp_im)
         else:
-            return Xrange_array(*Xrange_array._coexp_ufunc(
-                    mantissa0, exp0_re, mantissa1, exp1_re, np.add), None)
+            out["mantissa"], out["exp_re"] = Xrange_array._normalize(
+                    m0* m1, exp0_re + exp1_re)
+
+        return out.view(Xrange_array)
 
     @staticmethod
-    def _coexp_ufunc(m0, exp0, m1, exp1, ufunc):
+    def _negative(*inputs, out=None):
+        """ x -> -x """
+        op0, = inputs
+        m0 = op0._mantissa
+        if out is None:
+            out = Xrange_array.empty(op0.shape, dtype=m0.dtype, asarray=True)
+        out["mantissa"] = -m0
+        out["exp_re"] = op0._exp_re
+        if op0.is_complex:
+            out["exp_im"] = op0._exp_im
+        return out.view(Xrange_array) 
+
+    @staticmethod
+    def _add(ufunc, *inputs, out=None):
+        """ internal auxilliary function for + and - operators """
+        op0, op1 = inputs
+        m0 = op0._mantissa
+        m1 = op1._mantissa
+        if out is None:
+            out = Xrange_array.empty(np.broadcast(m0, m1).shape,
+                                   dtype=np.result_type(m0, m1), asarray=True)
+
+        if (op0.is_complex or op1.is_complex):
+            out["mantissa"].real, out["exp_re"] = Xrange_array._coexp_ufunc(
+                m0.real, op0._exp_re, m1.real, op1._exp_re, ufunc)
+            out["mantissa"].imag, out["exp_im"]  = Xrange_array._coexp_ufunc(
+                m0.imag, op0._exp_im, m1.imag, op1._exp_im, ufunc)
+        else:
+            out["mantissa"], out["exp_re"] = Xrange_array._coexp_ufunc(
+                    m0, op0._exp_re, m1, op1._exp_re, ufunc)
+
+        return out.view(Xrange_array) 
+
+    @staticmethod
+    def _coexp_ufunc(m0, exp0, m1, exp1, ufunc=None):
         """ 
         If ufunc is None :
         m0, exp0, m1, exp1, -> co_m0, co_m1, co_exp so that :
@@ -613,16 +646,16 @@ Reference:
             except if one of m0, m1 is null.
         If ufunc is provided :
             m0, exp0, m1, exp1, -> ufunc(co_m0, co_m1), co_exp
-        """
+   
+        """         
         co_m0, co_m1 = np.copy(np.broadcast_arrays(m0, m1))
-        scalar_shape = (co_m0.shape is tuple())
-        
+
         exp0, exp1 = np.broadcast_arrays(exp0, exp1)
         m0_null = (m0 == 0.)
         m1_null = (m1 == 0.)
         d_exp = exp0 - exp1
 
-        if scalar_shape:
+        if (co_m0.shape == ()):
             if ((exp1 > exp0) & ~m1_null):
                 co_m0 = Xrange_array._exp2_shift(co_m0, d_exp)
             if ((exp0 > exp1) & ~m0_null):
@@ -647,6 +680,35 @@ Reference:
             return (ufunc(co_m0, co_m1), exp)
         else:
             return (co_m0, co_m1, exp)
+
+    @staticmethod
+    def _add_reduce(*inputs, out=None, **kwargs):
+        """
+        """
+        print("_add_reduce", kwargs)
+        if out is not None:
+            raise NotImplementedError("`out` keyword not (yet) immplemented "
+                "for ufunc {} method {} of Xrange_array".format(
+                        np.add, "reduce"))
+        op, = inputs
+        if op.is_complex:
+            re = Xrange_array._add_reduce(op.real, **kwargs)
+            im = Xrange_array._add_reduce(op.imag, **kwargs)
+            return Xrange_array._build_complex(re, im)
+        else:
+            axis = kwargs.get("axis", 0)
+            co_exp_acc = getattr(np.maximum, "reduce")(op._exp_re, axis=axis)
+            if axis is not None:
+                _co_exp_acc = np.expand_dims(co_exp_acc, axis) # allow to brodcast with op._exp_re
+            else:
+                _co_exp_acc = co_exp_acc
+            co_m = Xrange_array._exp2_shift(op._mantissa, op._exp_re - _co_exp_acc)
+           
+            #return Xrange_array(getattr(np.add, "reduce")(co_m, axis=axis), co_exp_acc)
+            
+            return Xrange_array(*Xrange_array._normalize(
+                    getattr(np.add, "reduce")(co_m, axis=axis), co_exp_acc))
+
 
     @staticmethod
     def _exp2_shift(m, shift):
@@ -676,13 +738,11 @@ Reference:
             exp = np.clip(((bits >> 23) & 0xff) + shift, 0, None)
             return np.copysign(((exp << 23)  + (bits & 0x7fffff)).view(
                 np.float32), m)
-
         elif dtype == np.float64:
             bits = np.abs(m).view(np.int64)
             exp = np.clip(((bits >> 52) & 0x7ff) + shift, 0, None)
             return np.copysign(((exp << 52)  + (bits & 0xfffffffffffff)).view(
                 np.float64) , m)
-
         else:
             raise ValueError("Unsupported dtype {}".fomat(dtype))
 
@@ -690,11 +750,24 @@ Reference:
     def __repr__(self):
         """ Detailed string representation of self """
         s = (str(type(self)) + "\nshape: " +str(self.shape) +
-             "\ninternal dtype: " + str(self.dtype) + "\n" +
-             self.__str__())
+             "\ninternal dtype: " + str(self.dtype) + 
+             "\nbase 10 representation:\n" +
+             self._to_str_array().__repr__())
         return s
 
     def __str__(self):
+        """
+        String representation of self. Takes into account the value of
+        np.get_printoptions(precision)
+
+        Usage :
+        with np.printoptions(precision=2) as opts:
+            print(extended_range_array)
+        """
+        return np.array2string(self._to_str_array(), 
+            formatter={'numpystr':lambda x: "{}".format(x)})
+
+    def _to_str_array(self):
         """
         String representation of self. Takes into account the value of
         np.get_printoptions(precision)
@@ -716,8 +789,9 @@ Reference:
             s = Xrange_array._float_to_char(
                 *Xrange_array._normalize(self._mantissa, self._exp_re))
 
-        return np.array2string(s, 
-            formatter={'numpystr':lambda x: "{}".format(x)})
+        return s
+#    np.array2string(s, 
+#            formatter={'numpystr':lambda x: "{}".format(x)})
 
     @staticmethod
     def _float_to_char(m2, exp2, im=False, im_p_char = '\u2795',
@@ -765,8 +839,8 @@ Reference:
             exp10[is_null] = 0
 
         if im :
-            p_char = im_p_char # bold +
-            m_char = im_m_char # bold -
+            p_char = im_p_char # '\u2795' bold +
+            m_char = im_m_char # '\u2796' bold -
         else:
             p_char = " "
             m_char = "-"
@@ -802,27 +876,26 @@ Reference:
 
         In order to guarantee an accuracy > 15 digits (in reality, close to 16)
         for `mod` with the 9-digits highest int32 base 2 exponent (2**31 - 1)
-        we use an overall precision of 87 bits for this divmod.
+        we use an overall precision of 96 bits for this divmod.
 
         https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html
         """
-        # We will divide 'by hand' in base 2**29 (chosen so that exp2 * ri does
-        # not overflow an int64 with the largest exp2 == 2**31-1), ri < 2**29.
+        # We will divide by hand in base 2**32 (chosen so that exp2 * ri does
+        # not overflow an int64 with the largest exp2 == 2**31-1), ri < 2**32.
         # >>> import mpmath
-        # >>> mpmath.mp.dps = 30
-        # >>> mpmath.log("2.") / mpmath.log("10.") * mpmath.mpf(2**87)
-        # mpf('46582135582293341826703958.4180145')
-        r_hex = 46582135582293341826703958
+        # >>> mpmath.mp.dps = 35
+        # >>> mpmath.log("2.") / mpmath.log("10.") * mpmath.mpf(2**96)
+        # mpf('23850053418134191015272426710.02243475524574')
+        r_96 = 23850053418134191015272426710
         mm = [None] * 3
         for i in range(3):
-            ri = (r_hex >> (29 * (2 - i))) & int(2**29 - 1)
+            ri = (r_96 >> (32 * (2 - i))) & 0xffffffff
             mm[i] = exp2.astype(np.int64) * ri
-            if i == 0: # extract the integer
-                di, mm[i] = np.divmod(mm[i], 2**29)
+            if i == 0: # extract the integer `mod` part
+                di, mm[i] = np.divmod(mm[i], 0x100000000)
                 d = di.astype(np.int64)
-        m = (mm[0] + (mm[1] + mm[2] * 2.**-29) * 2.**-29) * 2**-29
-        d_m, m = np.divmod(m, 1.)
-        return  m2 * 10.**m, (d + d_m).astype(np.int32)
+        m = (mm[0] + (mm[1] + mm[2] * 2.**-32) * 2.**-32) * 2**-32
+        return  m2 * 10.**m, d.astype(np.int32)
 
 
     def __setitem__(self, key, value):
@@ -850,9 +923,179 @@ Reference:
         return res
 
     def __eq__(self, other):
-        """Ensure that all ne are handled at Xrange_array level"""
+        """ Ensure that `!=` is handled by Xrange_array instance. """
         return np.equal(self, other)
 
     def __ne__(self, other):
-        """Ensure that all eq at Xrange_array level"""
+        """ Ensure that `==` is handled by Xrange_array instance. """
         return np.not_equal(self, other)
+
+
+class SA_Polynomial(np.lib.mixins.NDArrayOperatorsMixin):
+    """
+    One-dimensional polynomial class, represented by its successive monome
+    coefficients.
+    P == arr[0] + arr[1] X¹ + ... + arr[n] X**n
+    
+    
+    array: array that can be viewed as a Xrange_array
+    cutoff : int, maximum degree coefficient. During insatnciation but also for
+    the subsequent operations, monomes of degree above cutoff will be 
+    disregarded.
+    
+    Operations implemented :
+        +, -, *
+    """  
+    # Unicode character mappings for "pretty print"
+    _superscript_mapping = str.maketrans({
+        "0": "⁰",
+        "1": "¹",
+        "2": "²",
+        "3": "³",
+        "4": "⁴",
+        "5": "⁵",
+        "6": "⁶",
+        "7": "⁷",
+        "8": "⁸",
+        "9": "⁹"
+    })
+    
+    def __init__(self, array, cutoff):
+        self.coeffs = np.asanyarray(array)[0:cutoff+1]
+        self.cutoff = cutoff
+
+    def  __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        casted_inputs = ()
+        cutoff = ()
+
+        for x in inputs:
+            # Only support operations with instances of 
+            # Xrange_array._HANDLED_TYPES.
+            if isinstance(x, SA_Polynomial):
+                cutoff += (x.cutoff,)
+                casted_inputs += (x.coeffs.view(Xrange_array),)
+            elif isinstance(x, Xrange_array):
+                casted_inputs += (x,)
+            elif isinstance(x, np.ndarray):
+                casted_inputs += (x.view(Xrange_array),)
+            elif isinstance(x, numbers.Number):
+                casted_inputs += (Xrange_array([x]),)
+            elif isinstance(x, list):
+                casted_inputs += (Xrange_array(x),)
+            else:
+                raise NotImplementedError("SA_Polynomial view not handled for "
+                    "this type {}, supported types : {}.".format(
+                    type(x), Xrange_array._HANDLED_TYPES + (SA_Polynomial,)))
+
+        cutoff = min(cutoff)
+        out = kwargs.pop("out", None)
+
+        if method == "__call__":
+            if ufunc in [np.add, np.subtract]:
+                return self._add(ufunc, *casted_inputs, cutoff=cutoff, out=out)
+            elif ufunc is np.negative:
+                return self._negative(*casted_inputs, cutoff=cutoff, out=out)
+            elif ufunc is np.multiply:
+                return self._mul(*casted_inputs, cutoff=cutoff, out=out)
+
+
+    @staticmethod
+    def _add(ufunc, *inputs, cutoff, out=None):
+        op0, op1 = inputs
+        res_len = min(max(len(op0), len(op1)), cutoff + 1)
+        op0_len = min(len(op0), res_len)
+        op1_len = min(len(op1), res_len)
+
+        dtype=np.result_type(op0._mantissa, op1._mantissa)
+        res = Xrange_array(np.zeros([res_len], dtype=dtype))
+
+        if ufunc is np.add:
+            res[:op0_len] += op0[:op0_len]
+            res[:op1_len] += op1[:op1_len]
+        elif ufunc is np.subtract: 
+            res[:op0_len] -= op0[:op0_len]
+            res[:op1_len] -= op1[:op1_len]
+        return SA_Polynomial(res, cutoff=cutoff)
+
+    @staticmethod
+    def _negative(*inputs, cutoff, out=None):
+        op0 = inputs
+        return SA_Polynomial(-op0, cutoff=cutoff)
+
+    @staticmethod
+    def _mul(*inputs, cutoff, out=None):
+        """
+        Here's a vectorized solution leveraging broadcasting that covers generic n-dim array cases -
+
+        np.take(x,(-shift + np.arange(x.shape[-1])[:,None]),axis=-1)
+
+        use np.pad ?
+        """
+        op0, op1 = inputs
+        # This is a convolution, fix the window with the shortest poly op0,
+        # swapping poly if needed.
+        window = min(len(op0), len(op1))
+        if len(op0) > window:
+            op0, op1 = op1, op0
+        l1 = len(op1)
+        cutoff_res = min(window + l1- 2, cutoff) # the degree..
+        # The first term is a0 * b0, so sum(a[0:l0] * b[0:-l0])
+        # the higest term is sum(a[0:l0] * b[cutoff_res:cutoff_res-l0])
+        # So we need to shift b down to -l0 and up to cutoff_res
+        #
+        # op0                   0  1  2  ...  l0-1
+        # op1        ...  2  1  0 -1 -2  ... -l0+1
+        #
+        # op0                   0  1  2  ...  l0-1
+        # op1    >>              ...  2  1  0 -1 -2  ... -l0+1
+        op1 = np.pad(op1, (window - 1, cutoff_res - l1 + 1)).view(Xrange_array)
+        shift = np.arange(0, cutoff_res + 1)
+        take1 = shift[:, np.newaxis] + (np.arange(window - 1 , -1, -1))
+        return SA_Polynomial(np.sum(op0 * np.take(op1, take1), axis=1),
+                             cutoff=cutoff) # /!\ not cutoff_res
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __str__(self):
+        return self._generate_string()
+
+    def _generate_string(self):
+        """
+        Generate the full string representation of the polynomial, using
+        ``term_method`` to generate each polynomial term.
+        """
+        str_coeffs = np.abs(self.coeffs.view(Xrange_array))._to_str_array()
+        linewidth = np.get_printoptions().get('linewidth', 75)
+        if linewidth < 1:
+            linewidth = 1
+        if self.coeffs[0] >= 0.:
+            out = f"{str_coeffs[0][1:]}"
+        else:
+            out = f"-{str_coeffs[0][1:]}"
+        for i, coef in enumerate(str_coeffs[1:]):
+            out += " "
+            power = str(i + 1)
+            # 1st Polynomial coefficient
+            if self.coeffs[i + 1] >= 0.:
+                next_term = f"+ {coef}"
+            else:
+                next_term = f"- {coef}"
+            # Polynomial term
+            next_term += self._str_term_unicode(power, "X")
+            # Length of the current line with next term added
+            line_len = len(out.split('\n')[-1]) + len(next_term)
+            # If not the last term in the polynomial, it will be two           
+            # characters longer due to the +/- with the next term
+            if i < len(self.coeffs[1:]) - 1:
+                line_len += 2
+            # Handle linebreaking
+            if line_len >= linewidth:
+                next_term = next_term.replace(" ", "\n", 1)
+            next_term = next_term.replace("  ", " ")
+            out += next_term
+        return out
+    
+    @classmethod
+    def _str_term_unicode(cls, i, arg_str):
+        return f"·{arg_str}{i.translate(cls._superscript_mapping)}"

@@ -42,6 +42,10 @@ def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.0):
 
         _matching(ufunc(Xrange_array(op1, exp_shift_array)),
                   expected, almost, dtype, cmp_op, ktol)
+        
+        # test "scalar"
+        _matching(ufunc(Xrange_array(op1, exp_shift_array)[0]),
+                  expected[0], almost, dtype, cmp_op, ktol)
 
     # testing binary operation of reals extended arrays
     for dtype in [np.float32, np.float64]:
@@ -68,6 +72,36 @@ def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.0):
         _matching(ufunc(Xrange_array(op1, exp_shift_array,
                                             exp_shift_array)),
                   expected, almost, dtype, cmp_op, ktol)
+
+
+def test_sum(almost=True, cmp_op=False):
+    print("testing np.sum")
+    for dtype in [np.float32, np.float64]:
+        #print("dtype", dtype)
+        n_vec = 20
+        max_bin_exp = 20
+        rg = np.random.default_rng(1)
+        
+        op1 = (rg.random([n_vec], dtype=dtype) +
+                   1j*rg.random([n_vec], dtype=dtype))
+        op1 *= 2.**rg.integers(low=-max_bin_exp, high=max_bin_exp, 
+                               size=[n_vec])
+        
+        op2 = (rg.random([n_vec], dtype=dtype))
+        exp_shift_array = rg.integers(low=-max_bin_exp, high=max_bin_exp, 
+                               size=[n_vec])
+    
+#        exp_shift_array = rg.integers(low=-max_bin_exp, high=max_bin_exp, 
+#                                      size=[n_vec])
+        # testing operation between 2 Xrange_arrays OR between ER_A and 
+        # a standard np.array
+        expected = np.sum(op1) #, op2)
+        res = np.sum(Xrange_array(op1))#, Xrange_array(op2))
+        _matching(res, expected, almost, dtype, cmp_op)
+
+        expected = np.sum(op2 * 2.**exp_shift_array) #, op2)
+        res = np.sum(Xrange_array(op2, exp_shift_array))#, Xrange_array(op2))
+        _matching(res, expected, almost, dtype, cmp_op)
 
 
 def _test_op2(ufunc, almost=False, cmp_op=False):
@@ -139,7 +173,8 @@ def _test_op2(ufunc, almost=False, cmp_op=False):
             expected = ufunc(op2, op1[0])
             _matching(ufunc(Xrange_array(op2), Xrange_array(op1)[0]),
                       expected, almost, dtype, cmp_op)
-    if cmp_op:
+            
+    if cmp_op and (ufunc not in [np.equal, np.not_equal]):
         return
 
     # testing binary operation of complex extended arrays
@@ -160,7 +195,7 @@ def _test_op2(ufunc, almost=False, cmp_op=False):
         # a standard np.array
         expected = ufunc(op1, op2)
         res = ufunc(Xrange_array(op1), Xrange_array(op2))
-        _matching(res, expected, almost, dtype)
+        _matching(res, expected, almost, dtype, cmp_op)
         
         # Checking datatype
         if ufunc in [np.add, np.multiply, np.subtract, np.divide]:
@@ -169,16 +204,16 @@ def _test_op2(ufunc, almost=False, cmp_op=False):
             assert res._mantissa.dtype == to_complex[dtype]
 
         _matching(ufunc(op1, Xrange_array(op2)),
-                  expected, almost, dtype)
+                  expected, almost, dtype, cmp_op)
         _matching(ufunc(Xrange_array(op1), op2),
-                  expected, almost, dtype)
+                  expected, almost, dtype, cmp_op)
         # Testing with non-null exponent (real and imag)
         expected = ufunc(op1 * 2.**exp_shift, op2 * 2.**-exp_shift)
         exp_shift_array = exp_shift * np.ones([n_vec], dtype=np.int32)
         _matching(ufunc(
                 Xrange_array(op1, exp_shift_array, exp_shift_array),
                 Xrange_array(op2, -exp_shift_array, -exp_shift_array)),
-            expected, almost, dtype)
+            expected, almost, dtype, cmp_op)
         # Testing cross product of real with complex
         expected = ufunc(op1 * 2.**exp_shift, (op2 * 2.**-exp_shift).real)
         exp_shift_array = exp_shift * np.ones([n_vec], dtype=np.int32)
@@ -186,20 +221,20 @@ def _test_op2(ufunc, almost=False, cmp_op=False):
                 Xrange_array(op1, exp_shift_array, exp_shift_array),
                 Xrange_array(op2, -exp_shift_array, -exp_shift_array
                                     ).real),
-            expected, almost, dtype)
+            expected, almost, dtype, cmp_op)
         expected = ufunc((op1 * 2.**exp_shift).imag, op2 * 2.**-exp_shift)
         _matching(ufunc(
                 Xrange_array(op1, exp_shift_array, exp_shift_array
                                     ).imag,
                 Xrange_array(op2, -exp_shift_array, -exp_shift_array)),
-            expected, almost, dtype)
+            expected, almost, dtype, cmp_op)
         # testing operation of an Xrange_array with a scalar
         expected = ufunc(op1[0], op2)
         _matching(ufunc(op1[0], Xrange_array(op2)),
-                  expected, almost, dtype)
+                  expected, almost, dtype, cmp_op)
         expected = ufunc(op2, op1[0])
         _matching(ufunc(Xrange_array(op2), op1[0]),
-                  expected, almost, dtype)
+                  expected, almost, dtype, cmp_op)
 
 def test_ops():
     """
@@ -240,6 +275,8 @@ def test_edge_cases():
     expected = ((2. - 1j) * base).real <= ((-1. + 1j) * base2).real
     np.testing.assert_array_equal(b, expected)
     
+    
+    #   Testing equality with "almost close" floats
     base = - np.ones([40], dtype=np.float64)
     base = np.linspace(0., 1., 40, dtype=np.float64)
     base2 = base + np.linspace(-1., 1., 40) * np.finfo(np.float64).eps
@@ -263,7 +300,8 @@ def test_edge_cases():
     np.testing.assert_array_equal(_base < _base2, base < base2)
     np.testing.assert_array_equal(_base > _base2, base > base2)
 
-    _base2 = Xrange_array(base2 / 2., exp + 1)
+    shift = np.arange(40)
+    _base2 = Xrange_array(base2 / 2**shift, exp + shift)
     np.testing.assert_array_equal(_base != _base2, base != base2)
  #   print("######################2")
     np.testing.assert_array_equal(_base == _base2, base == base2)
@@ -294,9 +332,18 @@ def test_edge_cases():
                                   base[20].real <= base2[20].real)
     np.testing.assert_array_equal(_base[2].real <= _base2[2].real,
                                   base[2].real <= base2[2].real)
-#    print(_base != _base2)
-#    print(_base2)
 
+    #   Testing complex equality logic
+    a = np.array([1., 1., 1., 1.]) + 1.j * np.array([1., 1., 1., 1.])
+    b = np.array([1., 1., -1., -1.]) + 1.j * np.array([1., -1., 1., -1.])
+    a_ = Xrange_array(a)
+    b_ = Xrange_array(b)
+    np.testing.assert_array_equal(a_ == b_, a == b)
+    np.testing.assert_array_equal(a_ == b, a == b)
+    np.testing.assert_array_equal(a == b_, a == b)
+    np.testing.assert_array_equal(a_ != b_, a != b)
+    np.testing.assert_array_equal(a_ != b, a != b)
+    np.testing.assert_array_equal(a != b_, a != b)
 
 
 def test_template_view():
@@ -327,11 +374,13 @@ def test_template_view():
     assert b[11] == b11_val
     # you have to make a new instance to see the modification
     b = Xrange_array(a)
-    print(b[11], b11_val, b[11] == b11_val)
-    print(b[11].real, b11_val.real, b[11].real == b11_val.real)
-    print(b[11].imag, b11_val.imag, b[11].imag == b11_val.imag)
+#    print(b[11], b11_val, b[11] == b11_val)
+#    print(b[11].real, b11_val.real, b[11].real == b11_val.real)
+#    print(b[11].imag, b11_val.imag, b[11].imag == b11_val.imag)
     assert b[11] != b11_val
     m = b._mantissa
+#    print(m, b._mantissa)
+#    print(m[11], b._mantissa[11])
     assert m[11] == 10.
 
     # Testing Xrange_array from template
@@ -499,11 +548,15 @@ def test_print():
         Xa = Xa * [-10., 0.1, 10., -0.1]
     str8 = ("[-1.00000000e+1001  1.00000000e-1001"
            "  3.14159265e+1001 -3.14159265e-1001]")
+    str8_m = ("[ 1.00000000e+1001 -1.00000000e-1001"
+                   " -3.14159265e+1001  3.14159265e-1001]")
     str2 = ("[-1.00e+1001  1.00e-1001  3.14e+1001 -3.14e-1001]")
     with np.printoptions(precision=2, linewidth=100) as _:
         assert Xa.__str__() == str2
     with np.printoptions(precision=8, linewidth=100) as _:
         assert Xa.__str__() == str8
+    with np.printoptions(precision=8, linewidth=100) as _:
+        assert (-Xa).__str__() == str8_m
 
     a = np.array([0.999999, 1.00000, 0.9999996, 0.9999994], dtype=np.float64)
     str5 =  "[ 9.99999e-01  1.00000e+00  1.00000e+00  9.99999e-01]"
@@ -573,7 +626,7 @@ def test_print():
              "  0.00000000000000e+000000000➖3.14159265358979e-646456991j]")
     with np.printoptions(precision=14, linewidth=100) as _:
         assert Xb.__str__() == str_14
-#    with np.printoptions(precision=14, linewidth=100) as _:
+#    with np.printoptions(precision=15, linewidth=100) as _:
 #        print(Xb) #.__str__() == str_13
         
 def test_item_assignment():
@@ -583,10 +636,23 @@ def test_item_assignment():
 #        print(Xa[0])
         assert Xa[0].__str__() == " 1.0000000000e+1002"
         assert type(Xa[0]) is Xrange_array
+    assert Xa[0] == Xrange_array("1.0e1002")
+#    print(1.j * Xa[0])
 
-    Xa[0] = Xrange_array("9.876543e-999")
-    with np.printoptions(precision=10, linewidth=100) as _:
-        assert Xa.__str__() == "[ 9.8765430000e-0999  2.0000000000e+1000]"
+    Xa[1] = Xrange_array("9.876543e-999")
+#    with np.printoptions(precision=10, linewidth=100) as _:
+#        assert Xa.__str__() == "[ 9.8765430000e-0999  2.0000000000e+1000]"
+    assert Xa[1] == Xrange_array("9.876543e-999")
+
+    Xb = Xa + 1.j * Xa
+    assert Xb[0] == Xa[0] + 1.j * Xa[0]
+#    print(Xb[0])
+    Xb[0] = Xa[0] + 3.14j * Xa[0]
+    assert Xb[0] == Xa[0] + 3.14j * Xa[0]
+#    print(Xb[0])
+    Xb[0] = Xa[0]
+    assert Xb[0] == Xa[0]
+#    print(Xb[0])
 
     
 if __name__ == "__main__":
@@ -594,10 +660,11 @@ if __name__ == "__main__":
     timing_op2_complex(np.add)
     timing_op2_complex(np.multiply)
     timing_abs2_complex(dtype=np.float64)
+    test_sum()
 
     test_template_view()
-    test_item_assignment()
-    
+#    test_item_assignment()
+
     test_ops()
     test_edge_cases()
     test_underflow()
