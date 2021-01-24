@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import numpy as np
-from arrays import Xrange_array
+from arrays import Xrange_array, Xrange_polynomial
 import time
 
 
@@ -75,10 +75,10 @@ def _test_op1(ufunc, almost=False, cmp_op=False, ktol=1.0):
 
 
 def test_sum(almost=True, cmp_op=False):
-    print("testing np.sum")
+    print("testing <np.sum>")
     for dtype in [np.float32, np.float64]:
         #print("dtype", dtype)
-        n_vec = 20
+        n_vec = 1000
         max_bin_exp = 20
         rg = np.random.default_rng(1)
         
@@ -102,6 +102,24 @@ def test_sum(almost=True, cmp_op=False):
         expected = np.sum(op2 * 2.**exp_shift_array) #, op2)
         res = np.sum(Xrange_array(op2, exp_shift_array))#, Xrange_array(op2))
         _matching(res, expected, almost, dtype, cmp_op)
+        
+        _op3 = Xrange_array(op2, exp_shift_array).reshape(10, 10, 10)
+        op3 = (op2 * 2.**exp_shift_array).reshape(10, 10, 10)
+        for axis in range(3):
+            res = np.sum(_op3, axis=axis)
+            expected = np.sum(op3, axis=axis)
+            _matching(res, expected, almost, dtype, cmp_op)        
+            
+        expected = np.sum(op1 * 2.**exp_shift_array) #, op2)
+        res = np.sum(Xrange_array(op1, exp_shift_array, exp_shift_array))#, Xrange_array(op2))
+        _matching(res, expected, almost, dtype, cmp_op)
+        
+        _op4 = Xrange_array(op1, exp_shift_array, exp_shift_array).reshape(10, 10, 10)
+        op4 = (op1 * 2.**exp_shift_array).reshape(10, 10, 10)
+        for axis in range(3):
+            res = np.sum(_op4, axis=axis)
+            expected = np.sum(op4, axis=axis)
+            _matching(res, expected, almost, dtype, cmp_op)
 
 
 def _test_op2(ufunc, almost=False, cmp_op=False):
@@ -653,7 +671,78 @@ def test_item_assignment():
     Xb[0] = Xa[0]
     assert Xb[0] == Xa[0]
 #    print(Xb[0])
+    Xb = Xa + 2.j * Xa
+    assert np.all(Xb.real == Xa)
+    assert np.all(Xb.imag == 2 * Xa)
+    Xb.real = -Xa
+    assert np.all(Xb.real == -Xa)
+    assert np.all(Xb.imag == 2 * Xa)
+    Xb.imag = -2 * Xa
+    assert np.all(Xb.real == -Xa)
+    assert np.all(Xb.imag == -2. * Xa)
+    
 
+def test_SA_Polynomial():
+    arr = [1., 2., 5.]
+    _P = Xrange_polynomial(arr, 10)
+    P = np.polynomial.Polynomial(arr)
+    _matching(_P.coeffs, P.coef)
+    _matching((_P * _P).coeffs, (P * P).coef)
+    _matching((_P * 2).coeffs, (P * 2).coef)
+    _matching((2 * _P).coeffs, (2 * P).coef)
+    _matching((_P + _P).coeffs, (P + P).coef)
+    _matching((_P + 2).coeffs, (P + 2).coef)
+    _matching((2 + _P).coeffs, (2 + P).coef)
+    _matching((_P - (2 * _P)).coeffs, (P - (2 * P)).coef)
+    _matching((_P - 2).coeffs, (P - 2).coef)
+
+    arr = [1. + 1.j, 1 - 1.j]
+    _P = Xrange_polynomial(arr, 10)
+    P = np.polynomial.Polynomial(arr)
+    _matching((_P * _P).coeffs, (P * P).coef)
+    
+    for dtype in [np.float32, np.float64, np.complex64, np.complex128]:
+        n_vec = 100
+        rg = np.random.default_rng(101)
+
+        if dtype in [np.float32, np.float64]:
+            arr = rg.random([n_vec], dtype=dtype)
+        else:
+            real_dtype = np.float32 if dtype is np.complex64 else np.float64
+            arr = rg.random([n_vec], dtype=real_dtype) + 1.j * (
+                    rg.random([n_vec], dtype=real_dtype))
+            
+        _P = Xrange_polynomial(arr, 1000)
+        P = np.polynomial.Polynomial(arr)
+        _matching((_P * _P).coeffs, (P * P).coef, almost=True, ktol=3., dtype=dtype)
+        
+        if dtype in [np.float32, np.float64]:
+            arr2 = rg.random([n_vec * 2], dtype=dtype)
+        else:
+            real_dtype = np.float32 if dtype is np.complex64 else np.float64
+            arr2 = rg.random([n_vec * 2], dtype=real_dtype) + 1.j * (
+                    rg.random([n_vec * 2], dtype=real_dtype))
+        
+        _Q = Xrange_polynomial(arr2, 1000)
+        Q = np.polynomial.Polynomial(arr2)
+        _matching((_Q * _P).coeffs, (Q * P).coef, almost=True, ktol=3., dtype=dtype)
+        _matching((_P * _Q).coeffs, (P * Q).coef, almost=True, ktol=3., dtype=dtype)
+        
+        _matching(_P([1.]), P(np.asarray([1.])), almost=True, ktol=3., dtype=dtype)
+        _matching(_P([1.j]), P(np.asarray([1.j])), almost=True, ktol=3., dtype=dtype)
+        _matching(_P([arr]), P(np.asarray([arr])), almost=True, ktol=3., dtype=dtype)
+        
+        # checking with cutdeg
+        for cutdeg in range(0, 400, 10):
+            _P = Xrange_polynomial(arr, cutdeg)
+            _Q = Xrange_polynomial(arr2, cutdeg)
+            _matching((_Q * _P).coeffs, (Q.cutdeg(cutdeg) * P.cutdeg(cutdeg)).cutdeg(cutdeg).coef,
+                      almost=True, ktol=3., dtype=dtype)
+            
+        
+        
+        
+    
     
 if __name__ == "__main__":
     timing_op1_complex(np.square)
@@ -663,10 +752,11 @@ if __name__ == "__main__":
     test_sum()
 
     test_template_view()
-#    test_item_assignment()
+    test_item_assignment()
 
     test_ops()
     test_edge_cases()
     test_underflow()
     
     test_print()
+    test_SA_Polynomial()

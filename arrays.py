@@ -87,6 +87,7 @@ Reference:
     """
     _FLOAT_DTYPES = [np.float32, np.float64]
     _COMPLEX_DTYPES = [np.complex64, np.complex128]
+    _DTYPES = _FLOAT_DTYPES + _COMPLEX_DTYPES
 
     # types that can be 'viewed' as Xrange_array:
     _HANDLED_TYPES = (np.ndarray, numbers.Number, list)
@@ -116,7 +117,7 @@ Reference:
         m  : mantissa
         exp_re : base 2 exponent
         """
-        exp_pattern = ("^([-+]?[0-9]+\.[0-9]*|[-+]?[0-9]*\.[0-9]+)"
+        exp_pattern = ("^([-+]?[0-9]+\.[0-9]*|[-+]?[0-9]*\.[0-9]+|[-+]?[0-9]+)"
                        "([eE]?)([-+]?[0-9]*)$")
         err_msg = ("Unsupported Xrange_array string item: <{}>\n" +
             "(Examples of supported input items: " +
@@ -134,8 +135,9 @@ Reference:
                             "represent exponent with int32, maxint 2**31-1")
                 except ValueError:
                     raise ValueError(err_msg.format(input_str))
-    # Need 96 bits precision for this division, will use Python integers, as
-    # speed is not critical here.
+    # We need 96 bits precision for accurate mantissa in this base-10 to base-2
+    # conversion, will use native Python integers, as speed is not critical
+    # here.
     # >>> import mpmath
     # >>> mpmath.mp.dps = 30
     # >>> mpmath.log("10.") / mpmath.log("2.") * mpmath.mpf("1.e25")
@@ -154,10 +156,17 @@ Reference:
         Builds the structured internal array.
         """
         mantissa_dtype = mantissa.dtype
-        if mantissa_dtype not in (Xrange_array._COMPLEX_DTYPES +
-                                  Xrange_array._FLOAT_DTYPES):
-            raise ValueError("Unsupported type for Xrange_array {}".format(
+        if mantissa_dtype not in Xrange_array._DTYPES:
+            casted = False
+            for cast_dtype in Xrange_array._DTYPES:
+                if np.can_cast(mantissa_dtype, cast_dtype, "safe"):
+                    mantissa = mantissa.astype(cast_dtype)
+                    casted = True
+                    break
+            if not casted:
+                raise ValueError("Unsupported type for Xrange_array {}".format(
                     mantissa_dtype))
+
         # Builds the field-array
         is_complex = mantissa_dtype in Xrange_array._COMPLEX_DTYPES
         sh = mantissa.shape
@@ -234,7 +243,7 @@ Reference:
                                    'offsets': [real_bytes, real_bytes*2 + 4],
                                    'itemsize': real_bytes * 2 + 8})
             return np.asarray(self).view(dtype=data_dtype).view(
-                Xrange_array)
+                    Xrange_array)
         else:
             return 0. * self
 
@@ -250,8 +259,7 @@ Reference:
         if asarray is True, return a view as an array, otherwise (default)
         return a Xrange_array
         """
-        is_complex = dtype in Xrange_array._COMPLEX_DTYPES
-        if is_complex:
+        if dtype in Xrange_array._COMPLEX_DTYPES:
             extended_dtype = np.dtype([('mantissa', dtype),
                                        ('exp_re', np.int32),
                                        ('exp_im', np.int32)], align=False)
@@ -262,6 +270,54 @@ Reference:
             return np.empty(shape, dtype=extended_dtype)
         else:
             return np.empty(shape, dtype=extended_dtype).view(Xrange_array)
+
+    @staticmethod
+    def zeros(shape, dtype):
+        """ Return a new Xrange_array of given shape and type, with all entries
+        initialized with 0."""
+        ret = Xrange_array.empty(shape, dtype, asarray=True)
+        if type(dtype) is np.dtype:
+            dtype = dtype.type
+        ret["mantissa"] = dtype(0.)
+        ret["exp_re"] = np.int32(0)
+        if dtype in Xrange_array._COMPLEX_DTYPES:
+            ret["exp_im"] = np.int32(0)
+        return ret.view(Xrange_array)
+
+    @staticmethod
+    def ones(shape, dtype):
+        """ Return a new Xrange_array of given shape and type, with all entries
+        initialized with 1."""
+        ret = Xrange_array.empty(shape, dtype, asarray=True)
+        if type(dtype) is np.dtype:
+            dtype = dtype.type
+        ret["mantissa"] = dtype(1.)
+        ret["exp_re"] = np.int32(0)
+        if dtype in Xrange_array._COMPLEX_DTYPES:
+            ret["exp_im"] = np.int32(0)
+        return ret.view(Xrange_array)
+
+    def fill(self, val):
+        """ Fill the array with val.
+        Parameter
+        ---------
+        val : numpy scalar of a Xrange_array of null shape
+        """
+        fill_dict = {"exp_re": 0, "exp_im": 0}
+        if np.isscalar(val):
+            fill_dict["mantissa"] = val
+        elif isinstance(val, Xrange_array) and (val.shape == ()):
+            fill_dict["mantissa"] = val._mantissa
+            fill_dict["exp_re"] = val._exp_re
+            fill_dict["exp_im"] = 0 if not(val.is_complex) else val._exp_im
+        else:
+            raise ValueError("Invalid input to Xrange_array.fill, "
+                    "expected a numpy scalar of a Xrange_array of null shape")
+        keys = ["mantissa", "exp_re"]
+        keys += ["exp_im"] if self.is_complex else []
+        for key in keys:
+            (np.asarray(self)[key]).fill(fill_dict[key])
+
 
     def to_standard(self):
         """ Returns the Xrange_array downcasted to standard np.ndarray ;
@@ -647,10 +703,11 @@ Reference:
         If ufunc is provided :
             m0, exp0, m1, exp1, -> ufunc(co_m0, co_m1), co_exp
    
-        """         
+        """
         co_m0, co_m1 = np.copy(np.broadcast_arrays(m0, m1))
+        exp0 = np.broadcast_to(exp0, co_m0.shape)
+        exp1 = np.broadcast_to(exp1, co_m0.shape)
 
-        exp0, exp1 = np.broadcast_arrays(exp0, exp1)
         m0_null = (m0 == 0.)
         m1_null = (m1 == 0.)
         d_exp = exp0 - exp1
@@ -685,7 +742,6 @@ Reference:
     def _add_reduce(*inputs, out=None, **kwargs):
         """
         """
-        print("_add_reduce", kwargs)
         if out is not None:
             raise NotImplementedError("`out` keyword not (yet) immplemented "
                 "for ufunc {} method {} of Xrange_array".format(
@@ -698,14 +754,12 @@ Reference:
         else:
             axis = kwargs.get("axis", 0)
             co_exp_acc = getattr(np.maximum, "reduce")(op._exp_re, axis=axis)
-            if axis is not None:
-                _co_exp_acc = np.expand_dims(co_exp_acc, axis) # allow to brodcast with op._exp_re
-            else:
-                _co_exp_acc = co_exp_acc
-            co_m = Xrange_array._exp2_shift(op._mantissa, op._exp_re - _co_exp_acc)
-           
-            #return Xrange_array(getattr(np.add, "reduce")(co_m, axis=axis), co_exp_acc)
-            
+            brodcast_co_exp_acc = (np.expand_dims(co_exp_acc, axis)
+                    if axis is not None else co_exp_acc)
+
+            co_m = Xrange_array._exp2_shift(op._mantissa, 
+                                            op._exp_re - brodcast_co_exp_acc)
+
             return Xrange_array(*Xrange_array._normalize(
                     getattr(np.add, "reduce")(co_m, axis=axis), co_exp_acc))
 
@@ -931,22 +985,24 @@ Reference:
         return np.not_equal(self, other)
 
 
-class SA_Polynomial(np.lib.mixins.NDArrayOperatorsMixin):
+class Xrange_polynomial(np.lib.mixins.NDArrayOperatorsMixin):
     """
-    One-dimensional polynomial class, represented by its successive monome
-    coefficients.
-    P == arr[0] + arr[1] X¹ + ... + arr[n] X**n
+    One-dimensionnal SA_Polynomial class which provides:
+        - the standard Python numerical methods ‘+’, ‘-‘, ‘*' 
     
-    
-    array: array that can be viewed as a Xrange_array
-    cutoff : int, maximum degree coefficient. During insatnciation but also for
+    Parameters
+    ----------
+    coeffs: array_like - can be viewed as a Xrange_array
+    Polynomial coefficients in order of increasing degree, i.e.,
+    (1, 2, 3) give 1 + 2*x + 3*x**2.
+
+    cutoff : int, maximum degree coefficient. At instanciation but also for
     the subsequent operations, monomes of degree above cutoff will be 
     disregarded.
     
-    Operations implemented :
-        +, -, *
+    
     """  
-    # Unicode character mappings for "pretty print"
+    # Unicode character mappings for "pretty print" of the polynomial
     _superscript_mapping = str.maketrans({
         "0": "⁰",
         "1": "¹",
@@ -960,20 +1016,25 @@ class SA_Polynomial(np.lib.mixins.NDArrayOperatorsMixin):
         "9": "⁹"
     })
     
-    def __init__(self, array, cutoff):
-        self.coeffs = np.asanyarray(array)[0:cutoff+1]
-        self.cutoff = cutoff
+    def __init__(self, coeffs, cutdeg):
+        if isinstance(coeffs, Xrange_array):
+            self.coeffs = coeffs[0:cutdeg+1]
+        else:
+            self.coeffs = (np.asarray(coeffs)[0:cutdeg+1]).view(Xrange_array)
+        if self.coeffs.ndim != 1:
+            raise ValueError("Only 1-d inputs for Xrange_polynomial")
+        self.cutdeg = cutdeg
 
     def  __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         casted_inputs = ()
-        cutoff = ()
+        cutdeg = ()
 
         for x in inputs:
             # Only support operations with instances of 
             # Xrange_array._HANDLED_TYPES.
-            if isinstance(x, SA_Polynomial):
-                cutoff += (x.cutoff,)
-                casted_inputs += (x.coeffs.view(Xrange_array),)
+            if isinstance(x, Xrange_polynomial):
+                cutdeg += (x.cutdeg,)
+                casted_inputs += (x.coeffs,)
             elif isinstance(x, Xrange_array):
                 casted_inputs += (x,)
             elif isinstance(x, np.ndarray):
@@ -984,61 +1045,56 @@ class SA_Polynomial(np.lib.mixins.NDArrayOperatorsMixin):
                 casted_inputs += (Xrange_array(x),)
             else:
                 raise NotImplementedError("SA_Polynomial view not handled for "
-                    "this type {}, supported types : {}.".format(
-                    type(x), Xrange_array._HANDLED_TYPES + (SA_Polynomial,)))
+                    "this type {}, supported types : {}.".format(type(x),
+                    Xrange_array._HANDLED_TYPES + (Xrange_polynomial,)))
 
-        cutoff = min(cutoff)
+        cutdeg = min(cutdeg)
         out = kwargs.pop("out", None)
 
         if method == "__call__":
             if ufunc in [np.add, np.subtract]:
-                return self._add(ufunc, *casted_inputs, cutoff=cutoff, out=out)
+                return self._add(ufunc, *casted_inputs, cutdeg=cutdeg, out=out)
             elif ufunc is np.negative:
-                return self._negative(*casted_inputs, cutoff=cutoff, out=out)
+                return self._negative(*casted_inputs, cutdeg=cutdeg, out=out)
             elif ufunc is np.multiply:
-                return self._mul(*casted_inputs, cutoff=cutoff, out=out)
-
+                return self._mul(*casted_inputs, cutdeg=cutdeg, out=out)
 
     @staticmethod
-    def _add(ufunc, *inputs, cutoff, out=None):
+    def _add(ufunc, *inputs, cutdeg, out=None):
+        """ Add or Subtract 2 SA_Polynomial """
         op0, op1 = inputs
-        res_len = min(max(len(op0), len(op1)), cutoff + 1)
+        res_len = min(max(len(op0), len(op1)), cutdeg + 1)
         op0_len = min(len(op0), res_len)
         op1_len = min(len(op1), res_len)
 
         dtype=np.result_type(op0._mantissa, op1._mantissa)
         res = Xrange_array(np.zeros([res_len], dtype=dtype))
 
+        res[:op0_len] += op0[:op0_len]
         if ufunc is np.add:
-            res[:op0_len] += op0[:op0_len]
             res[:op1_len] += op1[:op1_len]
         elif ufunc is np.subtract: 
-            res[:op0_len] -= op0[:op0_len]
             res[:op1_len] -= op1[:op1_len]
-        return SA_Polynomial(res, cutoff=cutoff)
+        return Xrange_polynomial(res, cutdeg=cutdeg)
 
     @staticmethod
-    def _negative(*inputs, cutoff, out=None):
+    def _negative(*inputs, cutdeg, out=None):
+        """ Change sign of a SA_Polynomial """
         op0 = inputs
-        return SA_Polynomial(-op0, cutoff=cutoff)
+        return Xrange_polynomial(-op0, cutdeg=cutdeg)
 
     @staticmethod
-    def _mul(*inputs, cutoff, out=None):
-        """
-        Here's a vectorized solution leveraging broadcasting that covers generic n-dim array cases -
-
-        np.take(x,(-shift + np.arange(x.shape[-1])[:,None]),axis=-1)
-
-        use np.pad ?
-        """
+    def _mul(*inputs, cutdeg, out=None):
+        """ Product of 2 SA_Polynomial """
         op0, op1 = inputs
         # This is a convolution, fix the window with the shortest poly op0,
-        # swapping poly if needed.
+        # swapping poly if needed. (Note we do not use fft but direct
+        # calculation)
         window = min(len(op0), len(op1))
         if len(op0) > window:
             op0, op1 = op1, op0
         l1 = len(op1)
-        cutoff_res = min(window + l1- 2, cutoff) # the degree..
+        cutoff_res = min(window + l1- 2, cutdeg) # the degree..
         # The first term is a0 * b0, so sum(a[0:l0] * b[0:-l0])
         # the higest term is sum(a[0:l0] * b[cutoff_res:cutoff_res-l0])
         # So we need to shift b down to -l0 and up to cutoff_res
@@ -1047,25 +1103,41 @@ class SA_Polynomial(np.lib.mixins.NDArrayOperatorsMixin):
         # op1        ...  2  1  0 -1 -2  ... -l0+1
         #
         # op0                   0  1  2  ...  l0-1
-        # op1    >>              ...  2  1  0 -1 -2  ... -l0+1
-        op1 = np.pad(op1, (window - 1, cutoff_res - l1 + 1)).view(Xrange_array)
+        # op1    >> (cutoff_res)  ...  2  1  0 -1 -2  ... -l0+1
+        op1 = np.pad(op1, (window - 1, cutoff_res - l1 + 1),
+                     mode='constant').view(Xrange_array)
         shift = np.arange(0, cutoff_res + 1)
         take1 = shift[:, np.newaxis] + (np.arange(window - 1 , -1, -1))
-        return SA_Polynomial(np.sum(op0 * np.take(op1, take1), axis=1),
-                             cutoff=cutoff) # /!\ not cutoff_res
+        return Xrange_polynomial(np.sum(op0 * np.take(op1, take1), axis=1),
+                cutdeg=cutdeg) # /!\ not cutoff_res
+
+    def __call__(self, arg):
+        """ Call self as a function.
+        """
+        if not isinstance(arg, Xrange_array):
+            arg = Xrange_array(np.asarray(arg))
+
+        res_dtype = np.result_type(arg._mantissa, self.coeffs._mantissa)
+        res = Xrange_array.empty(arg.shape, dtype=res_dtype)
+        res.fill(self.coeffs[-1])
+
+        for i in range(2, len(self.coeffs) + 1):
+            res = self.coeffs[-i] + res * arg
+        return res
 
     def __repr__(self):
-        return self.__str__()
+        return ("SA_Polynomial(cutdeg="+ str(self.cutdeg) +",\n" +
+                self.__str__() + ")")
 
     def __str__(self):
-        return self._generate_string()
+        return self._to_str()
 
-    def _generate_string(self):
+    def _to_str(self):
         """
         Generate the full string representation of the polynomial, using
-        ``term_method`` to generate each polynomial term.
+        `_monome_base_str` to generate each polynomial term.
         """
-        str_coeffs = np.abs(self.coeffs.view(Xrange_array))._to_str_array()
+        str_coeffs = np.abs(self.coeffs)._to_str_array()
         linewidth = np.get_printoptions().get('linewidth', 75)
         if linewidth < 1:
             linewidth = 1
@@ -1082,7 +1154,7 @@ class SA_Polynomial(np.lib.mixins.NDArrayOperatorsMixin):
             else:
                 next_term = f"- {coef}"
             # Polynomial term
-            next_term += self._str_term_unicode(power, "X")
+            next_term += self._monome_base_str(power, "X")
             # Length of the current line with next term added
             line_len = len(out.split('\n')[-1]) + len(next_term)
             # If not the last term in the polynomial, it will be two           
@@ -1095,7 +1167,7 @@ class SA_Polynomial(np.lib.mixins.NDArrayOperatorsMixin):
             next_term = next_term.replace("  ", " ")
             out += next_term
         return out
-    
+
     @classmethod
-    def _str_term_unicode(cls, i, arg_str):
-        return f"·{arg_str}{i.translate(cls._superscript_mapping)}"
+    def _monome_base_str(cls, i, var_str):
+        return f"·{var_str}{i.translate(cls._superscript_mapping)}"
