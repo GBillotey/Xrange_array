@@ -35,5 +35,6 @@ Performance compared with standard `np.complex128` operations on large (40'000) 
 - `abs2` overhead ratio: `2.2`
 
 **Xrange_polynomial** represents a polynomial with extended range coefficients. It implements the basic operations +, -, *.
+
 **Xrange_SA** is a subclass of **Xrange_polynomial** representing series approximations of a function. Compared to **Xrange_polynomial** it keeps track of a truncature error (high order terms ignored during multiplication).
 
