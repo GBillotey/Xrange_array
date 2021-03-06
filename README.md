@@ -4,8 +4,8 @@
 **Xrange_array** is a [numpy](https://numpy.org/) `nd.array` subclass which allows to represent floating-point numbers in an extended range:  
 - `[1.e-646456992, 1.e+646456992]`.   
 
-Float or complex numbers in simple or double precision with extra base-2 exponent stored as and `int32` are implemented.  
-It also provides real an complex implementation for:  
+Float or complex numbers in simple or double precision with an extra base-2 exponent stored as `int32` are implemented.  
+It also provides real and complex implementation for:  
 - The main binary operations `(+, -, *, /, <, <=, >, >=)`
 - a few selected complex functions `(abs, angle, sqrt, square, conj, log)`
 - an `abs2` function: optimal implementation of square of `abs` for complex numbers.
@@ -33,4 +33,7 @@ Performance compared with standard `np.complex128` operations on large (40'000) 
 - `add` overhead ratio: `10.6`
 - `multiply` overhead ratio: `4.3`
 - `abs2` overhead ratio: `2.2`
+
+**Xrange_polynomial** represents a polynomial with extended range coefficients. It implements the basic operations +, -, *.
+**Xrange_SA** is a subclass of **Xrange_polynomial** representing series approximations of a function. Compared to **Xrange_polynomial** it keeps track of a truncature error (high order terms ignored during multiplication).
 
