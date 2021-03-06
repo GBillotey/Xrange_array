@@ -7,7 +7,7 @@
 Float or complex numbers in simple or double precision with extra base-2 exponent stored as and `int32` are implemented.  
 It also provides real an complex implementation for:  
 - The main binary operations `(+, -, *, /, <, <=, >, >=)`
-- a few selected complex functions `(abs, sqrt, square, conj, log)`
+- a few selected complex functions `(abs, angle, sqrt, square, conj, log)`
 - an `abs2` function: optimal implementation of square of `abs` for complex numbers.
 
 Their use is transparent to the user, as they follow numpy general API.
@@ -16,21 +16,21 @@ Basic use:
 
 > `>>> Xa = Xrange_array([["123.456e-1789", "-.3e-7"], ["1.e700", "1.0"]])`  
 > `>>> print(Xa**2)`  
-> `[[ 1.52413839e-3574  9.00000000e-0016]`  
-> ` [ 1.00000000e+1400  1.00000000e+0000]]`  
+> `[[ 1.52413839e-3574  9.00000000e-16]`  
+> ` [ 1.00000000e+1400  1.00000000e+00]]`  
 
 Accurate base-10 conversion for string-inputs and printing:
 
 > `>>> Xb = np.array([1., -1.j]) * np.pi * Xrange_array(["1.e+646456991","1.e-646456991" ])`  
 > `>>> with np.printoptions(precision=13) as _:`  
 > `        print(Xb)`  
-> `[ 3.1415926535898e+646456991➕0.0000000000000e+000000000j`  
-> `  0.0000000000000e+000000000➖3.1415926535898e-646456991j]`  
+> `[ 3.1415926535898e+646456991➕0.0000000000000e+00j`  
+> `  0.0000000000000e+00➖3.1415926535898e-646456991j]`  
 
 Performance compared with standard `np.complex128` operations on large (40'000) arrays:  
 
-- `square` overhead ratio: `23.87`
-- `add` overhead ratio: `21.9`
-- `multiply` overhead ratio: `24.4`
-- `abs2` overhead ratio: `7.7`
+- `square` overhead ratio: `12.6`
+- `add` overhead ratio: `10.6`
+- `multiply` overhead ratio: `4.3`
+- `abs2` overhead ratio: `2.2`
 
